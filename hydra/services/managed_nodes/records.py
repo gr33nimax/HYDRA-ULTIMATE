@@ -24,6 +24,7 @@ from hydra.services.managed_nodes.cascade_participant_records import (
     complete_removal as _complete_removal,
     release_participant_operation as _release_participant_operation,
 )
+from hydra.services.managed_nodes.removal_records import begin_removal as _begin_removal
 from hydra.utils.commands import redact_text
 
 T = TypeVar("T")
@@ -285,6 +286,9 @@ class ManagedNodeRecords:
     ) -> None:
         _release_participant_operation(self._state_updater, operation_id, plan_digest, participant_id, terminal_state)
 
+    def begin_removal(self, operation: Operation, *, installation: Operation) -> Operation:
+        return _begin_removal(self._state_updater, operation, installation=installation)
+
     def find_operation(self, operation_id: str) -> Operation | None:
         return next((copy.deepcopy(item) for item in self.read_namespace().operations if item.id == operation_id), None)
 
@@ -339,6 +343,8 @@ class ManagedNodeRecords:
 
     @staticmethod
     def _validate_operation_progress(current: Operation, updated: Operation) -> None:
+        if current.error and current.error.get("stage") == "removal" and updated != current:
+            raise ValueError("managed-node operation was superseded by removal")
         if (current.kind, current.target_id, current.desired_digest, current.plan) != (
             updated.kind,
             updated.target_id,

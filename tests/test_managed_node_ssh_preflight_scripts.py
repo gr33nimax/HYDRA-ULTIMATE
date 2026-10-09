@@ -9,8 +9,10 @@ from unittest.mock import patch
 import pytest
 
 from hydra.core.host import HostBackend
+from hydra.contracts.managed_node_models import Operation
 from hydra.services.managed_nodes import ssh
 from tests.test_managed_node_enrollment import _FINGERPRINT, request
+from tests.test_managed_node_removal import installed_node
 
 
 @pytest.mark.parametrize(
@@ -72,3 +74,92 @@ def test_real_inspect_consumes_binary_ssh_outputs_without_installation(monkeypat
 def test_port_output_rejects_invalid_encoding_instead_of_ignoring_bytes():
     with pytest.raises(UnicodeDecodeError):
         ssh._parse_listening_ports(b"\xff")
+
+
+def test_remove_already_clean_vps_only_verifies_over_pinned_ssh(tmp_path):
+    from hydra.core import state as state_backend
+    from hydra.services.managed_nodes.records import ManagedNodeRecords
+
+    records = ManagedNodeRecords(state_reader=state_backend.load_state, state_updater=state_backend.update_state)
+    plan = installed_node(records, complete=False)
+    commands = []
+
+    def run(args, **_kwargs):
+        assert "-oStrictHostKeyChecking=yes" in args
+        commands.append(args[-1])
+        assert shlex.split(args[-1])[:4] == ["sudo", "-n", "python3", "-c"]
+        return CompletedProcess(args, 0, b'{"clean":true}', b"")
+
+    owner = ssh.OpenSshManagedNodeSSH(host=SimpleNamespace(run=run), known_hosts_root=tmp_path / "known-hosts")
+    owner.remove_node(plan, None)
+    assert len(commands) == 1
+
+
+@pytest.mark.parametrize("remaining", ["/opt/hydra", "/etc/hydra", "/etc/systemd/system/sing-box.service"])
+def test_cleanup_probe_detects_partial_installation_remnants(capsys, remaining):
+    with patch.object(Path, "exists", lambda path: str(path) == remaining), patch.object(Path, "is_symlink", return_value=False):
+        exec(compile(ssh._REMOTE_UNINSTALL_VERIFY, "<remote-probe>", "exec"), {})
+    assert json.loads(capsys.readouterr().out) == {"clean": False}
+
+
+@pytest.mark.parametrize("status", [b'{}', b'{"clean":0}', b'{"clean":"true"}'])
+def test_invalid_cleanup_status_cannot_confirm_removal(tmp_path, status):
+    from hydra.core import state as state_backend
+    from hydra.services.managed_nodes.records import ManagedNodeRecords
+
+    records = ManagedNodeRecords(state_reader=state_backend.load_state, state_updater=state_backend.update_state)
+    plan = installed_node(records, complete=False)
+    owner = ssh.OpenSshManagedNodeSSH(
+        host=SimpleNamespace(run=lambda *args, **kwargs: CompletedProcess(args, 0, status, b"")),
+        known_hosts_root=tmp_path / "known-hosts",
+    )
+    with pytest.raises(ssh.SshOperationError, match="invalid remote cleanup status"):
+        owner.remove_node(plan, None)
+
+
+def test_reconcile_remove_does_not_confirm_partial_cleanup(tmp_path):
+    from hydra.core import state as state_backend
+    from hydra.services.managed_nodes.records import ManagedNodeRecords
+
+    records = ManagedNodeRecords(state_reader=state_backend.load_state, state_updater=state_backend.update_state)
+    plan = installed_node(records)
+    owner = ssh.OpenSshManagedNodeSSH(
+        host=SimpleNamespace(run=lambda *args, **kwargs: CompletedProcess(args, 0, b'{"clean":false}', b"")),
+        known_hosts_root=tmp_path / "known-hosts",
+    )
+    operation = Operation("remove-1", "remove", plan.definition.id, "a" * 64,
+                          "recovery_required", active_step="remote_uninstall")
+    assert owner.reconcile_remove(plan, operation, None) == "retry"
+
+
+@pytest.mark.parametrize("clean_after", [True, False])
+def test_remove_runs_standard_uninstall_and_requires_clean_result(tmp_path, clean_after):
+    from hydra.core import state as state_backend
+    from hydra.services.managed_nodes.records import ManagedNodeRecords
+
+    records = ManagedNodeRecords(state_reader=state_backend.load_state, state_updater=state_backend.update_state)
+    plan = installed_node(records, complete=False)
+    commands = []
+    probes = 0
+
+    def run(args, **kwargs):
+        nonlocal probes
+        command = args[-1]
+        commands.append(command)
+        if "python3 -c" in command:
+            probes += 1
+            clean = probes > 1 and clean_after
+            return CompletedProcess(args, 0, json.dumps({"clean": clean}).encode(), b"")
+        if command.startswith("test -f "):
+            return CompletedProcess(args, 1, b"", b"")
+        assert command == "sudo -n /usr/local/bin/hydra uninstall --yes"
+        return CompletedProcess(args, 0, b"", b"")
+
+    owner = ssh.OpenSshManagedNodeSSH(host=SimpleNamespace(run=run), known_hosts_root=tmp_path / "known-hosts")
+    if clean_after:
+        owner.remove_node(plan, None)
+    else:
+        with pytest.raises(ssh.SshOperationError, match="remnants remain"):
+            owner.remove_node(plan, None)
+    assert probes == 2
+    assert commands.count("sudo -n /usr/local/bin/hydra uninstall --yes") == 1

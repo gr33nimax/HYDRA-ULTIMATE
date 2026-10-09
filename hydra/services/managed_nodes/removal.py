@@ -43,15 +43,22 @@ class NodeRemovalService:
         namespace = self._records.read_namespace()
         if any(node_id in {item.entry_id, item.exit_id} for item in namespace.cascades):
             raise ValueError("managed-node cascades must be removed before deleting a participant")
+        previous_removal = next(
+            (item for item in reversed(namespace.operations)
+             if item.kind == "remove" and item.target_id == node_id and item.state != "succeeded"),
+            None,
+        )
+        if previous_removal is not None:
+            return self.resume(previous_removal.id, ssh_auth=ssh_auth, progress=progress)
         install_operation = next(
             (
                 item for item in reversed(namespace.operations)
-                if item.kind == "install" and item.target_id == node_id and item.state == "succeeded"
+                if item.kind == "install" and item.target_id == node_id
             ),
             None,
         )
         if install_operation is None:
-            raise ValueError("node does not have a completed pinned installation plan")
+            raise ValueError("node does not have a pinned installation plan; remote identity cannot be verified")
         install_plan = InstallPlan.from_document(install_operation.plan)
         operation = Operation(
             id=self._new_operation_id(),
@@ -61,7 +68,7 @@ class NodeRemovalService:
             state="pending",
             plan={"installation": install_plan.to_document()},
         )
-        operation = self._records.begin_operation(operation)
+        operation = self._records.begin_removal(operation, installation=install_operation)
         return self._run_remote(operation, install_plan, ssh_auth, progress)
 
     def resume(

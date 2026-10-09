@@ -160,6 +160,8 @@ class InstallationService:
             raise KeyError(f"unknown managed-node installation operation {operation_id}")
         if operation.state == "succeeded":
             return operation
+        if operation.error and operation.error.get("stage") == "removal":
+            return operation
         if operation.error and operation.error.get("stage") == "consent" and not operation.existing_reinstall_confirmed:
             return operation
         plan = InstallPlan.from_document(operation.plan)

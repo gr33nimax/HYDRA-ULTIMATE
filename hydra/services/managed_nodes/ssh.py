@@ -13,6 +13,7 @@ from typing import Literal, Protocol
 from hydra.contracts.managed_node_installation import InstallPlan, InstallRequest
 from hydra.contracts.managed_node_models import NodeDefinition, Operation
 from hydra.core.host import HostBackend
+from hydra.core.uninstall import CRON_PATHS, DATA_PATHS, PROGRAM_PATHS, SYSTEM_SERVICES
 from hydra.services.managed_nodes.credentials import SshPasswordChannel
 from hydra.utils.commands import bounded_reason, redact_text
 
@@ -33,7 +34,12 @@ _REMOTE_OS = (
 )
 _REMOTE_FACTS = "import json,os,pathlib; c=os.environ.get('SSH_CONNECTION','').split(); p=pathlib.Path('/var/lib/hydra/state.json').exists() or pathlib.Path('/opt/hydra/main.py').exists() or pathlib.Path('/etc/systemd/system/hydra-managed-node.service').exists() or pathlib.Path('/usr/local/bin/hydra').exists(); print(json.dumps({'source':c[0] if len(c)==4 else '', 'existing':p}))"
 _REMOTE_BOOTSTRAP_STATUS = "import json,pathlib; p=pathlib.Path('/opt/hydra/.hydra-source-revision'); print(json.dumps({'revision':p.read_text().strip() if p.is_file() else '', 'installed':pathlib.Path('/opt/hydra/main.py').is_file()}))"
-_REMOTE_UNINSTALL_VERIFY = "import json,pathlib; p=[pathlib.Path('/var/lib/hydra/state.json'),pathlib.Path('/opt/hydra/main.py'),pathlib.Path('/etc/systemd/system/hydra-managed-node.service'),pathlib.Path('/usr/local/bin/hydra')]; print(json.dumps({'clean':not any(x.exists() for x in p)}))"
+_REMOTE_UNINSTALL_VERIFY = (
+    "import json,pathlib; p="
+    + repr([str(path) for path in (*PROGRAM_PATHS, *DATA_PATHS, *CRON_PATHS)]
+           + [f"/etc/systemd/system/{service}" for service in SYSTEM_SERVICES])
+    + "; print(json.dumps({'clean':not any(pathlib.Path(x).exists() or pathlib.Path(x).is_symlink() for x in p)}))"
+)
 
 
 class SshOperationError(RuntimeError):
@@ -263,6 +269,8 @@ class OpenSshManagedNodeSSH:
 
     def remove_node(self, plan: InstallPlan, auth: SshPasswordChannel | None) -> None:
         definition = plan.definition
+        if self._uninstall_is_clean(plan, auth):
+            return
         command = self.remote_command_for(plan, "uninstall")
         self._remove_management_firewall_if_present(plan, auth)
         result = self._execute(definition, command, auth, timeout=300, stage="remote-uninstall", allow_failure=True)
@@ -270,9 +278,7 @@ class OpenSshManagedNodeSSH:
             raise SshOperationError(
                 "remote-uninstall", bounded_reason(result) or "hydra uninstall --yes failed", outcome_unknown=False
             )
-        verify = "python3 -c " + shlex.quote(_REMOTE_UNINSTALL_VERIFY)
-        confirmed = self._execute(definition, verify, auth, timeout=15, stage="remote-uninstall-verify")
-        if json.loads(confirmed.stdout).get("clean") is not True:
+        if not self._uninstall_is_clean(plan, auth):
             raise SshOperationError(
                 "remote-uninstall-verify", "HYDRA-owned installation remnants remain", outcome_unknown=True
             )
@@ -312,7 +318,18 @@ class OpenSshManagedNodeSSH:
     ) -> Literal["done", "retry", "unknown"]:
         if operation.active_step != "remote_uninstall":
             return "unknown"
-        return "retry" if self._installation_present(plan.definition, auth) else "done"
+        return "done" if self._uninstall_is_clean(plan, auth) else "retry"
+
+    def _uninstall_is_clean(self, plan: InstallPlan, auth: SshPasswordChannel | None) -> bool:
+        prefix = "sudo -n " if plan.use_sudo else ""
+        verify = prefix + "python3 -c " + shlex.quote(_REMOTE_UNINSTALL_VERIFY)
+        result = self._execute(plan.definition, verify, auth, timeout=15, stage="remote-uninstall-verify")
+        status = json.loads(result.stdout)
+        if not isinstance(status, dict) or type(status.get("clean")) is not bool:
+            raise SshOperationError(
+                "remote-uninstall-verify", "invalid remote cleanup status", outcome_unknown=True
+            )
+        return status["clean"]
 
     @staticmethod
     def remote_command_for(plan: InstallPlan, action: str) -> str:
