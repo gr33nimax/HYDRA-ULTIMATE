@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import ssl
+import threading
 import time
 from pathlib import Path
 
@@ -168,12 +169,45 @@ def test_idle_tcp_and_partial_http_do_not_block_other_state_requests(tmp_path: P
         server.close()
 
 
-def test_request_saturation_is_bounded_and_tcp_tls_http_errors_keep_their_phase(tmp_path: Path):
+def test_request_saturation_is_bounded_and_tcp_tls_http_errors_keep_their_phase(tmp_path: Path, monkeypatch):
     server, client, *_rest = loopback(tmp_path, max_workers=2)
-    sockets = [socket.create_connection(("127.0.0.1", server.port), timeout=1) for _ in range(12)]
+    release = threading.Event()
+    saturated = threading.Event()
+    entered_lock = threading.Lock()
+    entered = 0
+    original_serve = server._serve
+
+    def hold_worker(connection):
+        nonlocal entered
+        with entered_lock:
+            entered += 1
+            if entered == 2:
+                saturated.set()
+        try:
+            assert release.wait(timeout=10)
+        finally:
+            connection.close()
+
+    monkeypatch.setattr(server, "_serve", hold_worker)
+    sockets = []
     try:
-        time.sleep(0.1)
-        assert server.active_workers <= 2
+        for _ in range(2):
+            sockets.append(socket.create_connection(("127.0.0.1", server.port), timeout=2))
+        assert saturated.wait(timeout=2)
+        assert server.active_workers == 2
+        # Observe each rejection instead of assuming the OS backlog accepts
+        # an entire burst before the accept thread gets CPU time.
+        for _ in range(10):
+            with socket.create_connection(("127.0.0.1", server.port), timeout=2) as overflow:
+                assert overflow.recv(1) == b""
+        assert entered == 2 and server.active_workers == 2
+        monkeypatch.setattr(server, "_serve", original_serve)
+        release.set()
+        assert server._slots.acquire(timeout=2)
+        assert server._slots.acquire(timeout=2)
+        server._slots.release()
+        server._slots.release()
+        assert client.state(time.monotonic() + 2).node_id == "de-1"
         closed = ManagedNodeClient(
             host="127.0.0.1",
             port=1,
@@ -186,6 +220,7 @@ def test_request_saturation_is_bounded_and_tcp_tls_http_errors_keep_their_phase(
             closed.state(time.monotonic() + 1)
         assert tcp.value.stage == "tcp"
     finally:
+        release.set()
         for connection in sockets:
             connection.close()
         server.close()
