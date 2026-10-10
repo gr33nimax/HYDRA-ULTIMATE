@@ -84,7 +84,7 @@ PROTOCOL_FIELDS: dict[str, tuple[NodeField, ...]] = {
         NodeField("domain", "Домен для Hysteria2", required=True),
         NodeField(
             "congestion_mode",
-            "Congestion control",
+            "Управление скоростью",
             kind="enum",
             default="bbr",
             choices=(("bbr", "BBR — автоматическая оценка"), ("brutal", "Brutal — явные Mbps")),
@@ -92,7 +92,7 @@ PROTOCOL_FIELDS: dict[str, tuple[NodeField, ...]] = {
         NodeField("port", "UDP-порт Hysteria2", kind="int", default=8443, minimum=1, maximum=65535),
         NodeField(
             "up_mbps",
-            "Upload, Mbps",
+            "Скорость отправки, Мбит/с",
             kind="int",
             default=100,
             minimum=1,
@@ -101,7 +101,7 @@ PROTOCOL_FIELDS: dict[str, tuple[NodeField, ...]] = {
         ),
         NodeField(
             "down_mbps",
-            "Download, Mbps",
+            "Скорость загрузки, Мбит/с",
             kind="int",
             default=100,
             minimum=1,
@@ -362,6 +362,27 @@ def preflight_protocol(name: str, config: dict) -> str:
 
 def protocol_field_names(name: str) -> tuple[str, ...]:
     return tuple(item.key for item in PROTOCOL_FIELDS.get(name, ()))
+
+
+def protocol_config_changed(name: str, previous: dict, collected: dict) -> bool:
+    """Compare effective settings, including defaults and conditional fields."""
+    def effective(source: dict) -> dict:
+        result = dict(source)
+        for item in PROTOCOL_FIELDS.get(name, ()):
+            if not _applies(item, result):
+                result.pop(item.key, None)
+                continue
+            value = result.get(item.key)
+            if value in (None, ""):
+                value = item.default
+            if value not in (None, ""):
+                result[item.key] = value
+            else:
+                result.pop(item.key, None)
+        if not any(key == "port" or key.endswith("_port") for key in result):
+            result["port"] = 443
+        return result
+    return effective(previous) != effective(collected)
 
 
 def protocol_field_labels(name: str) -> dict[str, str]:

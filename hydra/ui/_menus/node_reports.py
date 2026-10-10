@@ -31,7 +31,7 @@ def _check_lines(label: str, check: CheckResult) -> list[str]:
 def diagnostic_lines(report: DiagnosticReport) -> list[str]:
     lines = []
     for label, check in (
-        ("Управление", report.management), ("Runtime", report.runtime),
+        ("Управление", report.management), ("Работа ядра", report.runtime),
         ("Пользователи", report.users), ("Подписка ноды", report.subscription),
     ):
         lines.extend(_check_lines(label, check))

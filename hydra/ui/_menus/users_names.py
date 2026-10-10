@@ -18,10 +18,12 @@ def edit_configuration_name(
     *,
     global_scope: bool = False,
     node_id: str = "",
+    protocol_name: str = "",
 ) -> None:
     artifacts = _client_artifacts(state, user, app)
     if node_id:
-        keys = {profile.name_key for profile in app.nodes.profiles_for_user(user, state) if profile.node_id == node_id}
+        keys = {profile.name_key for profile in app.nodes.profiles_for_user(user, state)
+                if profile.node_id == node_id and (not protocol_name or profile.protocol == protocol_name)}
         artifacts = [artifact for artifact in artifacts if _artifact_name_key(artifact) in keys]
     if not artifacts:
         warn("Нет доступных конфигураций.")
@@ -73,6 +75,7 @@ def edit_global_configuration_names(
     app: ApplicationService,
     *,
     node_id: str = "",
+    protocol_name: str = "",
 ) -> None:
     user = next((item for item in state.users if not item.blocked), None)
     if user is None and state.users:
@@ -81,7 +84,7 @@ def edit_global_configuration_names(
         warn("Сначала добавьте пользователя, чтобы получить список конфигураций.")
         prompt("Нажмите Enter")
         return
-    edit_configuration_name(state, user, app, global_scope=True, node_id=node_id)
+    edit_configuration_name(state, user, app, global_scope=True, node_id=node_id, protocol_name=protocol_name)
 
 
 __all__ = ["edit_configuration_name", "edit_global_configuration_names"]

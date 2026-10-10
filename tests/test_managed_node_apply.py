@@ -70,13 +70,14 @@ def setup_service(
     initial_state: AppState | None = None,
     fail_runtime: bool = False,
     fail_rollback: bool = False,
+    desired_state: NodeDesired | None = None,
 ):
     host = host or SystemdHost()
     config = tmp_path / "sing-box.json"
     config.write_text("{}", encoding="utf-8")
     state_backend.save_state(initial_state or AppState(protocols={"vless": PluginState(enabled=False, port=443)}))
     records = ManagedNodeRecords(state_reader=state_backend.load_state, state_updater=state_backend.update_state)
-    plan = desired()
+    plan = desired_state if desired_state is not None else desired()
     operation = Operation("apply-1", "apply", "de-1", plan.digest, "pending", plan=plan.to_document())
     records.begin_operation(operation)
     snapshots = ManagedNodeSnapshotStore(host=host, root=tmp_path / "snapshots")
@@ -129,6 +130,23 @@ def test_apply_snapshots_before_effects_and_returns_receipt_only_after_runtime_p
     assert snapshots.load("apply-1") is None
     assert effects == ["config"]
     assert [user.uuid for user in state_backend.load_state().users] == ["user-1"]
+
+
+def test_removing_last_protocol_disables_runtime_assignment_and_commits_empty_profiles(tmp_path):
+    state = AppState(protocols={"vless": PluginState(enabled=True, installed=True, port=443,
+                                                     config={"server_private_key": "keep-local-material"})})
+    empty = NodeDesired("de-1", 2, [UserAssignment("user-1", "one@example.test")], [])
+    service, records, profiles, snapshots, _host, effects = setup_service(tmp_path, initial_state=state, desired_state=empty)
+    service._profile_builder = ManagedNodeProfileBuilder(protocols=SimpleNamespace(get=lambda name: None))
+    result = service.apply("apply-1")
+    persisted = state_backend.load_state()
+    assert result.state == "succeeded" and result.receipt is not None
+    assert persisted.protocols["vless"].enabled is False
+    assert persisted.protocols["vless"].config["server_private_key"] == "keep-local-material"
+    bundle = profiles.read("de-1", receipt_is_committed=lambda item: item.receipt == result.receipt)
+    assert bundle is not None and bundle.profiles == []
+    assert records.find_operation("apply-1").receipt == bundle.receipt
+    assert snapshots.load("apply-1") is None and effects == ["config"]
 
 
 def test_apply_keeps_node_local_material_and_user_accounting_by_identity(tmp_path: Path):

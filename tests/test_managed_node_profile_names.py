@@ -142,3 +142,22 @@ def test_manual_node_links_keep_node_names_instead_of_base_names(exported_node, 
     output = capsys.readouterr().out
     assert all(link in output for link in artifact.links)
     assert "Основа" not in output
+
+
+def test_protocol_name_editor_excludes_other_protocols_on_the_same_node(exported_node, monkeypatch):
+    from dataclasses import replace
+    state, definition, bundle = exported_node
+    awg = tuple(_profiles_for_bundle(state.users[0], state, definition, bundle))
+    other = replace(awg[0], protocol="anytls", name="UK AnyTLS",
+                    name_key=node_profile_name_key("uk-1", "anytls", "direct"))
+    protocols = MagicMock()
+    protocols.enabled_subscription_names.return_value = []
+    protocols.manual_client_artifacts.return_value = []
+    app = SimpleNamespace(protocols=protocols, nodes=SimpleNamespace(profiles_for_user=lambda user, state: (*awg, other)),
+                          configuration_names=ConfigurationNameService(), admin=MagicMock())
+    shown = []
+    monkeypatch.setattr("hydra.ui._menus.users_names.menu", lambda options, title: shown.extend(options) or "0")
+    edit_configuration_name(state, state.users[0], app, global_scope=True, node_id="uk-1", protocol_name="amneziawg")
+    assert len(shown) == 3
+    assert "UK AnyTLS" not in str(shown)
+    app.admin.save_state.assert_not_called()

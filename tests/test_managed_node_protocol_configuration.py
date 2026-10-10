@@ -6,7 +6,8 @@ from typing import Any, Callable, cast
 
 import pytest
 
-from hydra.contracts.managed_node_models import NodeDefinition, Operation, ProtocolAssignment
+from hydra.contracts.managed_node_models import CascadeDefinition, NodeDefinition, Operation, ProtocolAssignment
+from hydra.contracts.managed_node_observations import SyncReport
 from hydra.core.errors import StateConflictError
 from hydra.core.host import HostBackend
 from hydra.core.state_models import AppState, User
@@ -132,3 +133,86 @@ def test_failure_after_atomic_protocol_commit_keeps_same_pending_intent_for_resu
     assert namespace.operations[-1].id == operation_id
     assert namespace.operations[-1].plan == payload
     assert namespace.apply_intents[operation_id].to_document() == payload
+
+
+@pytest.mark.parametrize("keep_other", [False, True])
+def test_protocol_removal_commits_remaining_protocols_and_intent_before_sync(tmp_path, monkeypatch, keep_other):
+    from dataclasses import replace
+    state, records, service, updates = _fixture(tmp_path)
+    if keep_other:
+        definition = records.find_definition("de-1")
+        records.put_definition(replace(definition, protocols=[*definition.protocols, ProtocolAssignment("anytls", {"port": 443})]))
+        updates.clear()
+    report = SyncReport({"de-1": {"status": "pending", "operation_id": "protocol-apply-1"}})
+    snapshots = []
+    def sync(node_id):
+        snapshots.append(records.read_namespace())
+        return report
+    monkeypatch.setattr(service, "sync", sync)
+    assert service.remove_protocol("de-1", "vless", confirmed=True) == report
+    assert updates == ["update"] and len(snapshots) == 1
+    namespace = snapshots[0]
+    expected = [ProtocolAssignment("anytls", {"port": 443})] if keep_other else []
+    assert namespace.definitions[0].protocols == expected
+    operation = namespace.operations[-1]
+    intent = namespace.apply_intents[operation.id]
+    assert operation.plan == intent.to_document()
+    assert intent.protocols == expected
+    assert intent.users[0].email == state[0].users[0].email
+    assert operation.state == "pending"
+
+
+def test_identical_protocol_settings_do_not_write_state_or_start_sync(tmp_path, monkeypatch):
+    state, records, service, updates = _fixture(tmp_path)
+    before = copy.deepcopy(state[0])
+    monkeypatch.setattr(service, "sync", lambda node_id: pytest.fail("no-op must not sync"))
+    assert service.configure_protocol("de-1", ProtocolAssignment("vless", {"port": 443}), confirmed=True) is None
+    assert state[0] == before and updates == [] and records.list_operations() == []
+
+
+@pytest.mark.parametrize("confirmed", [False, None, 1])
+def test_protocol_removal_requires_explicit_confirmation(tmp_path, monkeypatch, confirmed):
+    _state, records, service, updates = _fixture(tmp_path)
+    monkeypatch.setattr(service, "sync", lambda node_id: pytest.fail("not confirmed"))
+    with pytest.raises(ValueError, match="confirmation"):
+        service.remove_protocol("de-1", "vless", confirmed=confirmed)
+    assert updates == [] and records.list_operations() == []
+
+
+def test_protocol_removal_conflict_preserves_definition_without_network_calls(tmp_path, monkeypatch):
+    state, records, service, updates = _fixture(tmp_path, fail_update=True)
+    before = copy.deepcopy(state[0])
+    monkeypatch.setattr(service, "sync", lambda node_id: pytest.fail("commit failed"))
+    with pytest.raises(StateConflictError):
+        service.remove_protocol("de-1", "vless", confirmed=True)
+    assert state[0] == before and records.list_operations() == []
+
+
+def test_protocol_removal_failed_send_keeps_pending_intent_for_retry(tmp_path, monkeypatch):
+    _state, records, service, updates = _fixture(tmp_path)
+    def fail(node_id):
+        raise TimeoutError("before send")
+    monkeypatch.setattr(service, "sync", fail)
+    with pytest.raises(TimeoutError, match="before send"):
+        service.remove_protocol("de-1", "vless", confirmed=True)
+    operation = records.list_operations()[-1]
+    assert operation.state == "pending"
+    assert records.find_apply_intent(operation.id).protocols == []
+    assert updates == ["update"]
+
+
+@pytest.mark.parametrize("blocker", ["cascade", "operation", "absent"])
+def test_protocol_removal_rejects_blocked_or_unconfigured_targets(tmp_path, monkeypatch, blocker):
+    from dataclasses import replace
+    state, records, service, updates = _fixture(tmp_path)
+    if blocker == "cascade":
+        records.put_cascade(CascadeDefinition("route", "Route", "de-1", "base", ["vless"]))
+    elif blocker == "operation":
+        records.begin_operation(Operation("active-1", "apply", "de-1", "c" * 64, "pending"))
+    else:
+        records.put_definition(replace(records.find_definition("de-1"), protocols=[]))
+    before = copy.deepcopy(state[0])
+    monkeypatch.setattr(service, "sync", lambda node_id: pytest.fail("target is blocked"))
+    with pytest.raises((ValueError, KeyError)):
+        service.remove_protocol("de-1", "vless", confirmed=True)
+    assert state[0] == before

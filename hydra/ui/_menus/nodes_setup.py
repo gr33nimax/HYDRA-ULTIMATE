@@ -126,7 +126,7 @@ def install_node(state, app) -> Operation | None:
                 return None
             reinstall = False
             if plan.existing_installation:
-                reinstall = confirm("Следующая операция переустановит HU с нуля. Продолжить?", default=False)
+                reinstall = confirm("HYDRA будет установлена заново на этой ноде. Продолжить?", default=False)
                 if not reinstall:
                     return None
             return app.nodes.install(plan, auth, True, reinstall, progress=_progress)

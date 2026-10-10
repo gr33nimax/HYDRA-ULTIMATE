@@ -173,11 +173,25 @@ class ManagedNodeRecords:
         node_id: str,
         assignment: ProtocolAssignment,
         operation_id: str,
-    ) -> tuple[NodeDefinition, NodeDesired, Operation]:
+    ) -> tuple[NodeDefinition, NodeDesired, Operation] | None:
         """CAS node protocol, current user projection and apply intent together."""
         assignment.validate()
+        return self._begin_protocol_change(node_id, assignment.name, operation_id, assignment)
 
-        def mutate(state: AppState) -> tuple[NodeDefinition, NodeDesired, Operation]:
+    def begin_protocol_removal(
+        self, node_id: str, protocol: str, operation_id: str,
+    ) -> tuple[NodeDefinition, NodeDesired, Operation]:
+        """Persist the remaining protocols and remote apply as one state update."""
+        ProtocolAssignment(protocol).validate()
+        result = self._begin_protocol_change(node_id, protocol, operation_id, None)
+        assert result is not None
+        return result
+
+    def _begin_protocol_change(
+        self, node_id: str, protocol: str, operation_id: str, assignment: ProtocolAssignment | None,
+    ) -> tuple[NodeDefinition, NodeDesired, Operation] | None:
+
+        def mutate(state: AppState) -> tuple[NodeDefinition, NodeDesired, Operation] | None:
             from dataclasses import replace
 
             from hydra.services.managed_nodes.access import assignment_from_user
@@ -187,6 +201,11 @@ class ManagedNodeRecords:
             definition = next((item for item in namespace.definitions if item.id == node_id), None)
             if definition is None:
                 raise KeyError(f"unknown managed node {node_id}")
+            existing = next((item for item in definition.protocols if item.name == protocol), None)
+            if assignment is not None and existing == assignment:
+                return None
+            if assignment is None and existing is None:
+                raise KeyError(f"protocol {protocol} is not configured on node {node_id}")
             if any(node_id in {item.entry_id, item.exit_id} for item in namespace.cascades):
                 raise ValueError("remove or reconfigure affected cascades before changing this node")
             if any(
@@ -196,8 +215,9 @@ class ManagedNodeRecords:
             ):
                 raise ValueError("managed-node target already has an active operation")
 
-            protocols = [item for item in definition.protocols if item.name != assignment.name]
-            protocols.append(copy.deepcopy(assignment))
+            protocols = [item for item in definition.protocols if item.name != protocol]
+            if assignment is not None:
+                protocols.append(copy.deepcopy(assignment))
             updated = replace(definition, protocols=protocols)
             updated.validate()
             previous = next(

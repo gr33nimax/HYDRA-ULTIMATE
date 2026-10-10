@@ -7,7 +7,7 @@ from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Mapping
 
-from hydra.contracts.managed_node_models import CascadeDefinition, ProtocolAssignment
+from hydra.contracts.managed_node_models import CascadeDefinition
 from hydra.contracts.managed_node_observations import DiagnosticReport, NodeView
 from hydra.services.application import ApplicationService
 from hydra.ui._menus.nodes_setup import install_node
@@ -20,6 +20,11 @@ _SUB_LABELS = {
     "wait": "SUB : ⏳WAIT",
     "error": "SUB : ❌ERROR",
     "unknown": "SUB : —",
+}
+_STATE_LABELS = {
+    "ok": "Готово", "succeeded": "Завершено", "failed": "Ошибка",
+    "pending": "Ожидает завершения", "running": "Выполняется",
+    "recovery_required": "Требуется восстановление", "unknown": "Нет данных",
 }
 
 
@@ -55,7 +60,7 @@ def render_node_card(
             if check.outcome == "error" and check.reason:
                 lines.append(f"ошибка: {check.reason}")
     if view.operation and view.operation.state != "succeeded":
-        lines.append(f"Операция: {view.operation.id} · {view.operation.state}")
+        lines.append(f"Операция: {view.operation.id} · {_STATE_LABELS.get(view.operation.state, view.operation.state)}")
         if view.operation.error:
             lines.append(f"Причина: {view.operation.error.get('reason', '')}")
     return "\n".join(lines)
@@ -100,7 +105,7 @@ def menu_nodes(state, app: ApplicationService) -> None:
             return
         options: list[tuple[str, str, Any]] = [
             ("1", "Добавить ноду", "проверка SSH, план, подтверждение"),
-            ("2", "Каскады", f"{len(cascades)} маршрутов, только две разные стороны"),
+            ("2", "Каскады", f"Маршрутов: {len(cascades)}"),
         ]
         indexed = {str(index + 3): view for index, view in enumerate(views)}
         options.extend((key, view.definition.name, _summary(view)) for key, view in indexed.items())
@@ -130,11 +135,10 @@ def _node_card(view: NodeView, app: ApplicationService) -> None:
         clear()
         panel("НОДА", render_node_card(view).splitlines(), wrap=True)
         options = [
-            ("1", "Протоколы", "изменить публичные параметры и применить"),
-            ("2", "Синхронизировать", "только выбранная нода"),
-            ("3", "Диагностика", "management, runtime, SUB и реальные проверки"),
-            ("4", "Удалить ноду", "только после штатного удаления на VPS"),
-            ("6", "Названия конфигураций", "общие имена и флаги профилей в подписках"),
+            ("1", "Протоколы", "настройки, названия конфигураций и удаление"),
+            ("2", "Синхронизировать", "обновить пользователей и настройки этой ноды"),
+            ("3", "Диагностика", "проверить связь, протоколы и подписки"),
+            ("4", "Удалить ноду", "удалить HYDRA с сервера и убрать ноду из подписок"),
         ]
         if _can_resume_install(view):
             options.append(("5", "Продолжить установку", "проверить незавершённый этап и применить конфигурацию"))
@@ -156,9 +160,6 @@ def _node_card(view: NodeView, app: ApplicationService) -> None:
                     return
             elif choice == "5" and _can_resume_install(view):
                 _resume_install(view, app)
-            elif choice == "6":
-                from hydra.ui._menus.users_names import edit_global_configuration_names
-                edit_global_configuration_names(app.admin.load_state(), app, node_id=view.definition.id)
         except Exception as exc:
             error(f"Операция не завершена: {_reason(exc)}")
         prompt("Enter — продолжить")
@@ -187,57 +188,8 @@ def _resume_install(view: NodeView, app: ApplicationService) -> None:
 
 
 def _protocols(view: NodeView, app: ApplicationService) -> None:
-    current = {item.name: item for item in view.definition.protocols}
-    while True:
-        options = [(str(index), protocol_label(name), "настроен") for index, name in enumerate(sorted(current), 1)]
-        add_key = str(len(options) + 1)
-        options.extend([(add_key, "Добавить транспорт", "только реализованные формы"), ("0", "Назад", "")])
-        selected_key = menu(options, "ПРОТОКОЛЫ НОДЫ")
-        if selected_key == "0":
-            return
-        names = sorted(current)
-        if selected_key == add_key:
-            from hydra.plugins.base import PluginCategory
-            from hydra.ui._menus.node_protocol_fields import PROTOCOL_FIELDS
-
-            available = [
-                item
-                for item in app.protocols.list(PluginCategory.TRANSPORT)
-                if item.meta.name in PROTOCOL_FIELDS
-                and item.meta.name not in current
-                and (
-                    item.meta.capabilities.subscription_enabled or item.meta.capabilities.hydra_v2_subscription_enabled
-                )
-            ]
-            pick = menu(
-                [
-                    (str(index), protocol_label(item.meta.name, getattr(item.meta, "display_name", "")), "")
-                    for index, item in enumerate(available, 1)
-                ]
-                + [("0", "Назад", "")],
-                "ДОБАВИТЬ ПРОТОКОЛ",
-            )
-            if not pick.isdecimal() or not 1 <= int(pick) <= len(available):
-                continue
-            protocol = available[int(pick) - 1].meta.name
-            before = ProtocolAssignment(protocol, {})
-        else:
-            if not selected_key.isdecimal() or not 1 <= int(selected_key) <= len(names):
-                continue
-            protocol = names[int(selected_key) - 1]
-            before = current[protocol]
-        from hydra.ui._menus.node_protocol_fields import collect_protocol_config
-
-        parameters = collect_protocol_config(protocol, dict(before.parameters))
-        if parameters is None:
-            continue
-        if not any(key == "port" or key.endswith("_port") for key in parameters):
-            parameters["port"] = 443
-        assignment = ProtocolAssignment(protocol, parameters)
-        if not confirm(f"Применить {protocol_label(protocol)} на {view.definition.name}?", default=False):
-            continue
-        app.nodes.configure_protocol(view.definition.id, assignment, confirmed=True)
-        return
+    from hydra.ui._menus.node_protocols import manage_node_protocols
+    manage_node_protocols(view, app, _show_report)
 
 
 def _remove_node(view: NodeView, app: ApplicationService) -> bool:
@@ -245,15 +197,15 @@ def _remove_node(view: NodeView, app: ApplicationService) -> bool:
         cascade for cascade in app.nodes.list_cascades() if view.definition.id in {cascade.entry_id, cascade.exit_id}
     ]
     if cascades:
-        panel("СНАЧАЛА УДАЛИ КАСКАДЫ", [f"{item.name}: {item.entry_id} → {item.exit_id}" for item in cascades])
-        error("Ноду нельзя забыть или отсоединить; очисти каскады и подтверждённо удали VPS")
+        panel("СНАЧАЛА УДАЛИТЕ КАСКАДЫ", [f"{item.name}: {item.entry_id} → {item.exit_id}" for item in cascades])
+        error("Нода используется в каскадах. Сначала удалите их, затем повторите удаление ноды.")
         return False
     if not confirm(
         f"Удалить HYDRA и ноду {view.definition.name}? Профили этой ноды исчезнут из подписок.",
         default=False,
     ):
         return False
-    password = ask_secret("Пароль SSH для штатного uninstall (пусто — SSH-ключ)")
+    password = ask_secret("Пароль SSH для удаления HYDRA (пусто — SSH-ключ)")
     if password is None:
         return False
     from contextlib import nullcontext
@@ -276,7 +228,7 @@ def menu_cascades(app: ApplicationService) -> None:
             return
         indexed = {str(index + 1): item for index, item in enumerate(cascades)}
         options = [(key, item.name, f"{item.entry_id} → {item.exit_id}") for key, item in indexed.items()]
-        options.extend([("A", "Добавить каскад", "только доказанные одноимённые транспорты"), ("0", "Назад", "")])
+        options.extend([("A", "Добавить каскад", "маршрут через два сервера"), ("0", "Назад", "")])
         choice = menu(options, "КАСКАДЫ")
         if choice == "0":
             return
@@ -333,7 +285,7 @@ def _cascade_card(definition: CascadeDefinition, app: ApplicationService) -> Non
     choice = menu(
         [
             ("1", "Переименовать", "ID и ключи не меняются"),
-            ("2", "Удалить каскад", "только его контексты и профили"),
+            ("2", "Удалить каскад", "убрать маршрут и его профили из подписок"),
             ("0", "Назад", ""),
         ],
         f"{definition.name} · {definition.entry_id} → {definition.exit_id}",
@@ -371,7 +323,7 @@ def _show_report(title: str, report: Any) -> None:
         panel(title, diagnostic_lines(report), wrap=True)
         return
     if hasattr(report, "state"):
-        lines = [f"Операция: {report.id}", f"Состояние: {report.state}"]
+        lines = [f"Операция: {report.id}", f"Состояние: {_STATE_LABELS.get(report.state, report.state)}"]
         if report.error:
             lines.append(f"{report.error.get('stage')}: {report.error.get('reason')}")
         panel(title, lines, wrap=True)
@@ -379,7 +331,8 @@ def _show_report(title: str, report: Any) -> None:
     if hasattr(report, "nodes"):
         lines = []
         for node_id, value in report.nodes.items():
-            lines.append(f"{node_id}: {value.get('status', value.get('outcome', 'unknown'))}")
+            status = value.get("status", value.get("outcome", "unknown"))
+            lines.append(f"{node_id}: {_STATE_LABELS.get(status, status)}")
             if value.get("operation_id"):
                 lines.append(f"Операция: {value['operation_id']}")
             if value.get("error"):
@@ -392,7 +345,13 @@ def _show_report(title: str, report: Any) -> None:
 
 
 def _reason(exc: Exception) -> str:
-    return str(exc) if str(exc) else type(exc).__name__
+    reason = str(exc) if str(exc) else type(exc).__name__
+    return {
+        "remove or reconfigure affected cascades before changing this node":
+            "Нода используется в каскадах. Сначала удалите их, затем измените протоколы.",
+        "managed-node target already has an active operation":
+            "На ноде выполняется другая операция. Дождитесь её завершения или продолжите синхронизацию.",
+    }.get(reason, reason)
 
 
 __all__ = ["menu_nodes", "menu_cascades"]

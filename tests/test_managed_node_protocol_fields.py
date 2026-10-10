@@ -73,6 +73,7 @@ def test_registry_choices_and_collected_values_are_usable_by_node_plugins():
         ):
             collected = fields.collect_protocol_config(name, config)
         assert collected is not None, name
+        assert not fields.protocol_config_changed(name, config, collected), name
         state = AppState(protocols={name: PluginState(installed=True, enabled=True, config={})})
         try:
             result = plugin.prepare_node_config(state, collected)
@@ -80,3 +81,19 @@ def test_registry_choices_and_collected_values_are_usable_by_node_plugins():
             assert str(exc).strip(), name
         else:
             assert result is True, name
+
+
+@pytest.mark.parametrize("name, previous, collected, changed", [
+    ("amneziawg", {}, {"protocol_mode": "2.0", "port": 443}, False),
+    ("amneziawg", {"protocol_mode": "2.0"}, {"protocol_mode": "3.1"}, True),
+    ("naive", {"domain": "node.test"}, {"domain": "node.test", "network": "tcp", "uot": True}, False),
+    ("naive", {"domain": "node.test"}, {"domain": "node.test", "uot": False}, True),
+    ("mtproto_zig", {"domain": "node.test", "web_mode": "off", "web_domain": "unused.test"},
+     {"domain": "node.test", "web_mode": "off"}, False),
+    ("mtproto_zig", {"domain": "node.test", "web_mode": "hybrid", "web_domain": "relay.test"},
+     {"domain": "node.test", "web_mode": "off"}, True),
+    ("hysteria2", {"domain": "node.test", "congestion_mode": "bbr"},
+     {"domain": "node.test", "congestion_mode": "bbr", "port": 8443}, False),
+])
+def test_effective_changes_distinguish_defaults_from_real_edits(name, previous, collected, changed):
+    assert fields.protocol_config_changed(name, previous, collected) is changed

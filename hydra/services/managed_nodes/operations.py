@@ -29,7 +29,8 @@ class ManagedNodeOperations(Protocol):
     def discover_host_key(self, address: str, port: int) -> str: ...
     def cascade_options(self, entry_id: str, exit_id: str) -> list[ProtocolOption]: ...
     def save_cascade(self, definition: CascadeDefinition, confirmed: bool, progress=None) -> Operation: ...
-    def configure_protocol(self, node_id: str, assignment: ProtocolAssignment, confirmed: bool) -> None: ...
+    def configure_protocol(self, node_id: str, assignment: ProtocolAssignment, confirmed: bool) -> SyncReport | None: ...
+    def remove_protocol(self, node_id: str, protocol: str, confirmed: bool) -> SyncReport: ...
     def rename_cascade(self, cascade_id: str, name: str) -> None: ...
     def remove_cascade(self, cascade_id: str, confirmed: bool, progress=None) -> Operation: ...
     def resume_cascade(self, operation_id: str, progress=None) -> Operation: ...
@@ -86,6 +87,9 @@ class UnavailableManagedNodeOperations:
         raise RuntimeError("managed-node cascades are unavailable")
 
     def configure_protocol(self, node_id: str, assignment: ProtocolAssignment, confirmed: bool) -> None:
+        raise RuntimeError("managed-node protocol operations are unavailable")
+
+    def remove_protocol(self, node_id: str, protocol: str, confirmed: bool) -> SyncReport:
         raise RuntimeError("managed-node protocol operations are unavailable")
 
     def rename_cascade(self, cascade_id: str, name: str) -> None:
@@ -217,12 +221,21 @@ class ManagedNodeOperationsService:
     def save_cascade(self, definition: CascadeDefinition, confirmed: bool, progress=None) -> Operation:
         return self._cascade_service.save_cascade(definition, confirmed=confirmed, progress=progress)
 
-    def configure_protocol(self, node_id: str, assignment: ProtocolAssignment, confirmed: bool) -> None:
+    def configure_protocol(self, node_id: str, assignment: ProtocolAssignment, confirmed: bool) -> SyncReport | None:
         if type(confirmed) is not bool or not confirmed:
             raise ValueError("managed-node protocol changes require confirmation")
-        self._records.begin_protocol_apply(node_id, assignment, self._new_operation_id())
-        self.sync(node_id)
-        return None
+        assignment.validate()
+        definition = self._records.find_definition(node_id)
+        if definition is not None and assignment in definition.protocols:
+            return None
+        changed = self._records.begin_protocol_apply(node_id, assignment, self._new_operation_id())
+        return self.sync(node_id) if changed is not None else None
+
+    def remove_protocol(self, node_id: str, protocol: str, confirmed: bool) -> SyncReport:
+        if type(confirmed) is not bool or not confirmed:
+            raise ValueError("managed-node protocol removal requires confirmation")
+        self._records.begin_protocol_removal(node_id, protocol, self._new_operation_id())
+        return self.sync(node_id)
 
     def rename_cascade(self, cascade_id: str, name: str) -> None:
         self._cascade_service.rename_cascade(cascade_id, name)

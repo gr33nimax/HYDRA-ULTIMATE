@@ -166,7 +166,7 @@ def test_sync_report_includes_operation_and_actual_failure(monkeypatch):
         {"uk-1": {"status": "failed", "operation_id": "apply-1", "error": "profile export failed"}},
         errors=["profile export failed"],
     ))
-    assert captured == ["uk-1: failed", "Операция: apply-1", "Причина: profile export failed"]
+    assert captured == ["uk-1: Ошибка", "Операция: apply-1", "Причина: profile export failed"]
 
 
 def test_awg_card_reports_configuration_when_native_connection_probe_is_unavailable(tmp_path):
