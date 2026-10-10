@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import json
-import ipaddress
 import re
 import ssl
 import urllib.parse
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler
 from typing import Protocol
 
 from hydra.core.state import load_state
@@ -18,7 +17,7 @@ from hydra.services.subscriptions.client_configs import (
     generate_singbox_config,
     generate_throne_sub,
 )
-from hydra.services.subscriptions.proxy_protocol import read_source_address
+from hydra.services.subscriptions.listener import _ProxyTLSHTTPServer
 from hydra.services.subscriptions.devices import (
     HWID_HEADERS,
     hydrabox_client_fingerprint,
@@ -171,6 +170,14 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
         if plugins is None:
             self._send_error(503, "Subscription service is not configured")
             return
+        if self.path == "/healthz":
+            try:
+                load_state()
+            except Exception:
+                self._send_error(503, "Subscription state is unavailable")
+                return
+            self._send_error(200, '{"status":"ok"}')
+            return
         request = urllib.parse.urlparse(self.path)
         parameters = urllib.parse.parse_qs(request.query)
         requested_format = parameters.get("format", [None])[0]
@@ -265,46 +272,6 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
         self.wfile.write(content.encode("utf-8"))
 
 
-def _is_loopback(address: tuple[object, ...]) -> bool:
-    try:
-        return ipaddress.ip_address(str(address[0])).is_loopback
-    except ValueError:
-        return False
-
-
-class _ProxyTLSHTTPServer(HTTPServer):
-    """Consume a trusted PROXY preamble before starting the TLS handshake."""
-
-    subscription_plugins: SubscriptionPluginAccess | None = None
-    node_exports: ManagedNodeProfileReader | None = None
-
-    def __init__(
-        self,
-        server_address,
-        handler_class,
-        tls_context: ssl.SSLContext,
-    ) -> None:
-        self.tls_context = tls_context
-        super().__init__(server_address, handler_class)
-
-    def get_request(self):
-        connection, address = super().get_request()
-        try:
-            source = (
-                read_source_address(connection)
-                if _is_loopback(address)
-                else None
-            )
-            tls_connection = self.tls_context.wrap_socket(
-                connection,
-                server_side=True,
-            )
-        except Exception:
-            connection.close()
-            raise
-        return tls_connection, source or address
-
-
 def run_standalone(
     plugins: SubscriptionPluginAccess,
     host: str = "0.0.0.0",
@@ -317,18 +284,13 @@ def run_standalone(
 
     certificate, key = find_any_cert(state)
     if not certificate or not key:
-        print(
-            "ERROR: SSL certificates not found! "
-            "Subscription server requires HTTPS/TLS.",
-        )
-        return
+        raise RuntimeError("SSL certificates not found: subscription server requires HTTPS/TLS")
 
     try:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         context.load_cert_chain(certfile=certificate, keyfile=key)
     except Exception as exc:
-        print(f"Failed to wrap socket with SSL: {exc}")
-        return
+        raise RuntimeError(f"Failed to load subscription TLS certificate: {exc}") from exc
 
     try:
         server = _ProxyTLSHTTPServer(
@@ -337,8 +299,7 @@ def run_standalone(
             context,
         )
     except OSError as exc:
-        print(f"Failed to bind subscription server to {host}:{port}: {exc}")
-        return
+        raise RuntimeError(f"Failed to bind subscription server to {host}:{port}: {exc}") from exc
 
     server.subscription_plugins = plugins
     server.node_exports = node_exports

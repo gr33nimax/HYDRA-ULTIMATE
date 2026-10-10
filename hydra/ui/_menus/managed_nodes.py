@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from hydra.contracts.managed_node_models import CascadeDefinition, ProtocolAssignment
-from hydra.contracts.managed_node_observations import NodeView
+from hydra.contracts.managed_node_observations import DiagnosticReport, NodeView
 from hydra.services.application import ApplicationService
 from hydra.ui._menus.nodes_setup import install_node
 from hydra.ui.protocol_ui import protocol_label
@@ -53,7 +53,11 @@ def render_node_card(
             lines.append(f"{label}: {state}")
             if check.outcome == "error" and check.reason:
                 lines.append(f"ошибка: {check.reason}")
-    return "\\n".join(lines)
+    if view.operation and view.operation.state != "succeeded":
+        lines.append(f"Операция: {view.operation.id} · {view.operation.state}")
+        if view.operation.error:
+            lines.append(f"Причина: {view.operation.error.get('reason', '')}")
+    return "\n".join(lines)
 
 
 def _time_label(value: str | None, now: datetime) -> str:
@@ -124,16 +128,16 @@ def _node_card(view: NodeView, app: ApplicationService) -> None:
         view = current
         clear()
         panel("НОДА", render_node_card(view).splitlines(), wrap=True)
-        choice = menu(
-            [
-                ("1", "Протоколы", "изменить публичные параметры и применить"),
-                ("2", "Синхронизировать", "только выбранная нода"),
-                ("3", "Диагностика", "management, runtime, SUB и реальные проверки"),
-                ("4", "Удалить ноду", "только после штатного удаления на VPS"),
-                ("0", "Назад", ""),
-            ],
-            "КАРТОЧКА НОДЫ",
-        )
+        options = [
+            ("1", "Протоколы", "изменить публичные параметры и применить"),
+            ("2", "Синхронизировать", "только выбранная нода"),
+            ("3", "Диагностика", "management, runtime, SUB и реальные проверки"),
+            ("4", "Удалить ноду", "только после штатного удаления на VPS"),
+        ]
+        if _can_resume_install(view):
+            options.append(("5", "Продолжить установку", "проверить незавершённый этап и применить конфигурацию"))
+        options.append(("0", "Назад", ""))
+        choice = menu(options, "КАРТОЧКА НОДЫ")
         if choice == "0":
             return
         try:
@@ -148,9 +152,33 @@ def _node_card(view: NodeView, app: ApplicationService) -> None:
             elif choice == "4":
                 if _remove_node(view, app):
                     return
+            elif choice == "5" and _can_resume_install(view):
+                _resume_install(view, app)
         except Exception as exc:
             error(f"Операция не завершена: {_reason(exc)}")
         prompt("Enter — продолжить")
+
+
+def _can_resume_install(view: NodeView) -> bool:
+    operation = view.operation
+    return bool(operation and operation.kind == "install" and operation.state != "succeeded"
+                and not (operation.error and operation.error.get("stage") == "removal"))
+
+
+def _resume_install(view: NodeView, app: ApplicationService) -> None:
+    from contextlib import nullcontext
+    from hydra.services.managed_nodes.credentials import SshPasswordChannel
+
+    if not _can_resume_install(view) or view.operation is None:
+        return
+    if not confirm(f"Продолжить установку {view.definition.name}?", default=False):
+        return
+    password = ask_secret("Пароль SSH (пусто — SSH-ключ)")
+    if password is None:
+        return
+    with SshPasswordChannel(password) if password else nullcontext(None) as auth:
+        result = app.nodes.resume(view.operation.id, auth)
+    _show_report("ПРОДОЛЖЕНИЕ УСТАНОВКИ", result)
 
 
 def _protocols(view: NodeView, app: ApplicationService) -> None:
@@ -332,6 +360,11 @@ def _summary(view: NodeView) -> str:
 
 
 def _show_report(title: str, report: Any) -> None:
+    if isinstance(report, DiagnosticReport):
+        from hydra.ui._menus.node_reports import diagnostic_lines
+
+        panel(title, diagnostic_lines(report), wrap=True)
+        return
     if hasattr(report, "state"):
         lines = [f"Операция: {report.id}", f"Состояние: {report.state}"]
         if report.error:
@@ -339,11 +372,15 @@ def _show_report(title: str, report: Any) -> None:
         panel(title, lines, wrap=True)
         return
     if hasattr(report, "nodes"):
-        lines = [
-            f"{node_id}: {value.get('status', value.get('outcome', 'unknown'))}"
-            for node_id, value in report.nodes.items()
-        ]
-        lines.extend(report.errors)
+        lines = []
+        for node_id, value in report.nodes.items():
+            lines.append(f"{node_id}: {value.get('status', value.get('outcome', 'unknown'))}")
+            if value.get("operation_id"):
+                lines.append(f"Операция: {value['operation_id']}")
+            if value.get("error"):
+                lines.append(f"Причина: {value['error']}")
+        shown_errors = {value.get("error") for value in report.nodes.values()}
+        lines.extend(item for item in report.errors if item not in shown_errors)
         panel(title, lines or ["Нет новых данных"], wrap=True)
         return
     panel(title, [str(report)], wrap=True)

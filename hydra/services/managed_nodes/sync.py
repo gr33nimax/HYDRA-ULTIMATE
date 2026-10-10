@@ -125,7 +125,7 @@ class ManagedNodeSyncService:
                 try:
                     sample, error = future.result()
                 except Exception as exc:
-                    sample, error = None, type(exc).__name__
+                    sample, error = None, bounded_error(exc)
                 if sample is not None:
                     samples[definition.id] = sample
                 if error:
@@ -170,7 +170,7 @@ class ManagedNodeSyncService:
             self._store_failure(definition.id, management)
             return None, reason
         except Exception as exc:
-            reason = type(exc).__name__
+            reason = bounded_error(exc)
             management = CheckResult(
                 "management",
                 definition.id,
@@ -197,7 +197,7 @@ class ManagedNodeSyncService:
                 try:
                     results[definition.id] = future.result()
                 except Exception as exc:
-                    results[definition.id] = {"status": "failed", "error": type(exc).__name__}
+                    results[definition.id] = {"status": "failed", "error": bounded_error(exc)}
         return results
 
     def _sync_one(self, definition, sample: NodeSample | None, progress, deep: bool) -> dict[str, Any]:

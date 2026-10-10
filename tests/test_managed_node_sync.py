@@ -39,6 +39,57 @@ def desired(*, blocked: bool = False, disabled: list[str] | None = None, port: i
     )
 
 
+def test_pending_remote_apply_preserves_install_handoff(tmp_path: Path):
+    frozen = desired()
+    operation = Operation("install-1", "install", "de-1", "a" * 64, "running",
+                          completed_steps=["bootstrap", "management_identity", "management_verified"],
+                          error={"stage": "apply", "reason": "pending"})
+    worker = service(tmp_path, operation, Client(frozen))
+    worker._records.store_apply_intent(operation.id, frozen)
+    result, error = worker._apply_operations.remote_apply(
+        worker._client_factory(None), "de-1", operation, frozen, deadline=time.monotonic() + 10,
+    )
+    assert result is not None and result.state == "running" and not error
+    current = worker._records.find_operation(operation.id)
+    assert current is not None and current.error is not None
+    assert current.error["stage"] == "apply"
+    assert worker._apply_operations.operation_for("de-1", frozen).id == operation.id
+
+
+def test_legacy_lost_install_handoff_recovers_only_with_frozen_intent_and_enrollment_proof(tmp_path: Path):
+    frozen = desired()
+    operation = Operation("install-1", "install", "de-1", "a" * 64, "running",
+                          completed_steps=["bootstrap", "management_identity", "management_verified"])
+    worker = service(tmp_path, operation, Client(frozen))
+    with pytest.raises(RuntimeError, match="install-1.*unresolved"):
+        worker._apply_operations.operation_for("de-1", frozen)
+    worker._records.store_apply_intent(operation.id, frozen)
+    assert worker._apply_operations.operation_for("de-1", frozen).id == operation.id
+
+
+def test_install_without_verified_management_cannot_be_taken_over_by_apply(tmp_path: Path):
+    frozen = desired()
+    operation = Operation("install-1", "install", "de-1", "a" * 64, "running",
+                          completed_steps=["bootstrap", "management_identity"])
+    worker = service(tmp_path, operation, Client(frozen))
+    worker._records.store_apply_intent(operation.id, frozen)
+    with pytest.raises(RuntimeError, match="unresolved"):
+        worker._apply_operations.operation_for("de-1", frozen)
+
+
+def test_remote_apply_failure_keeps_reason_in_targeted_report(tmp_path: Path):
+    frozen = desired()
+    operation = Operation("apply-1", "apply", "de-1", frozen.digest, "running", plan=frozen.to_document())
+    client = Client(frozen)
+    client.operation = lambda op_id, deadline: Operation(
+        op_id, "apply", "de-1", frozen.digest, "failed", error={"stage": "apply", "reason": "AWG profile missing"},
+    )
+    worker = service(tmp_path, operation, client)
+    result, error = worker._apply_operations.remote_apply(client, "de-1", operation, frozen, deadline=time.monotonic() + 10)
+    assert result is not None and result.state == "failed"
+    assert error == "AWG profile missing"
+
+
 def service(tmp_path: Path, operation: Operation, client: Client):
     state = AppState()
 

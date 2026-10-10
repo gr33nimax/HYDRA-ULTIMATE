@@ -370,6 +370,12 @@ class AwgProfileMixin:
                 assigned += 1
         return assigned
 
+    def prepare_configuration(self, state: PluginStateAccess) -> None:
+        """Materialize a fresh node's local keys before the pure config render."""
+        protocol = state.protocols.get("amneziawg")
+        if protocol is not None and not protocol.config.get("profiles"):
+            self.on_enable(state)
+
     def on_enable(self, state: PluginStateAccess) -> None:
         """Make "enabled" mean "serving": a host without a profile gets one, and its users addresses.
 

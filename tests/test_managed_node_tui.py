@@ -38,6 +38,11 @@ def test_node_card_uses_clock_users_sub_and_protocol_label_fallback():
     assert "VLESS" in text
     assert "connection refused" in text
     assert "контакт" not in text and "публикация" not in text
+    assert "\\n" not in text
+    assert text.splitlines() == [
+        "Germany · 22:34", "Управление: 🟢 Online", "Пользователи 3/4",
+        "SUB : ⏳WAIT", "VLESS: ❌", "ошибка: connection refused",
+    ]
 
 
 def test_online_management_with_failed_apply_renders_subscription_error(tmp_path):
@@ -110,3 +115,55 @@ def test_stale_management_check_is_no_data_not_offline():
 
     assert "нет данных" in text
     assert "Offline" not in text
+
+
+def test_diagnostic_report_has_separate_readable_checks(monkeypatch):
+    from hydra.contracts.managed_node_observations import DiagnosticReport
+    from hydra.ui._menus import managed_nodes
+
+    ok = CheckResult("management", "uk-1", "ok")
+    report = DiagnosticReport(
+        ok, ok,
+        CheckResult("users", "uk-1", "error", reason="applied user identities or restrictions differ from the base"),
+        CheckResult("subscription", "uk-1", "unknown", reason="no committed apply receipt"),
+        {"amneziawg": {"configuration": CheckResult("configuration", "uk-1", "error",
+                                                   reason="configured inbound is not confirmed")}},
+    )
+    captured = []
+    monkeypatch.setattr(managed_nodes, "panel", lambda title, lines, **kwargs: captured.extend(lines))
+    managed_nodes._show_report("ДИАГНОСТИКА", report)
+    text = "\n".join(captured)
+    assert "Управление: ✅ OK" in captured
+    assert "Пользователи: ❌ Ошибка" in captured
+    assert "Применение конфигурации ещё не подтверждено" in text
+    assert "AmneziaWG" in captured
+    assert "CheckResult(" not in text and "DiagnosticReport(" not in text
+
+
+def test_resume_install_keeps_original_operation_and_ssh_key(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    from hydra.ui._menus import managed_nodes
+
+    operation = Operation("install-original", "install", "uk-1", "a" * 64, "running")
+    view = SimpleNamespace(operation=operation, definition=SimpleNamespace(name="Великобритания"))
+    app = MagicMock()
+    monkeypatch.setattr(managed_nodes, "confirm", lambda *args, **kwargs: True)
+    monkeypatch.setattr(managed_nodes, "ask_secret", lambda *args: "")
+    monkeypatch.setattr(managed_nodes, "_show_report", lambda *args: None)
+    managed_nodes._resume_install(view, app)
+    app.nodes.resume.assert_called_once_with("install-original", None)
+    app.nodes.install.assert_not_called()
+
+
+def test_sync_report_includes_operation_and_actual_failure(monkeypatch):
+    from hydra.contracts.managed_node_observations import SyncReport
+    from hydra.ui._menus import managed_nodes
+
+    captured = []
+    monkeypatch.setattr(managed_nodes, "panel", lambda title, lines, **kwargs: captured.extend(lines))
+    managed_nodes._show_report("СИНХРОНИЗАЦИЯ", SyncReport(
+        {"uk-1": {"status": "failed", "operation_id": "apply-1", "error": "profile export failed"}},
+        errors=["profile export failed"],
+    ))
+    assert captured == ["uk-1: failed", "Операция: apply-1", "Причина: profile export failed"]

@@ -46,10 +46,10 @@ def test_proxy_header_is_consumed_before_the_tls_handshake():
 
     context.wrap_socket.side_effect = wrap_tls
     with patch(
-        "hydra.services.subscriptions.server.read_source_address",
+        "hydra.services.subscriptions.listener.read_source_address",
         side_effect=read_proxy,
     ):
-        accepted = server.get_request()
+        accepted = server._tls_request(connection, ("127.0.0.1", 45678))
 
     assert events == ["proxy", "tls"]
     assert accepted == ("tls-connection", ("198.51.100.7", 54321))
@@ -61,9 +61,9 @@ def test_direct_remote_tls_skips_proxy_protocol_parsing():
     context.wrap_socket.return_value = "tls-connection"
 
     with patch(
-        "hydra.services.subscriptions.server.read_source_address",
+        "hydra.services.subscriptions.listener.read_source_address",
     ) as read_proxy:
-        accepted = server.get_request()
+        accepted = server._tls_request(connection, ("203.0.113.9", 45678))
 
     read_proxy.assert_not_called()
     assert accepted == ("tls-connection", ("203.0.113.9", 45678))
@@ -74,10 +74,10 @@ def test_malformed_proxy_header_closes_the_raw_connection():
     server, context = _server(connection, ("127.0.0.1", 45678))
 
     with patch(
-        "hydra.services.subscriptions.server.read_source_address",
+        "hydra.services.subscriptions.listener.read_source_address",
         side_effect=OSError("truncated PROXY header"),
     ), pytest.raises(OSError, match="truncated"):
-        server.get_request()
+        server._tls_request(connection, ("127.0.0.1", 45678))
 
     connection.close.assert_called_once_with()
     context.wrap_socket.assert_not_called()
@@ -128,3 +128,19 @@ def test_standalone_server_wraps_each_accepted_connection():
     server.server_close.assert_called_once_with()
     assert server.subscription_plugins is plugins
     assert server.node_exports is node_exports
+
+
+def test_missing_certificate_is_a_failed_start_instead_of_a_clean_exit():
+    with patch("hydra.services.subscriptions.server.load_state"), \
+         patch("hydra.services.subscriptions.server.find_any_cert", return_value=(None, None)), \
+         pytest.raises(RuntimeError, match="certificates not found"):
+        run_standalone(MagicMock())
+
+
+def test_bind_failure_is_a_failed_start():
+    with patch("hydra.services.subscriptions.server.load_state"), \
+         patch("hydra.services.subscriptions.server.find_any_cert", return_value=("/cert", "/key")), \
+         patch("hydra.services.subscriptions.server.ssl.SSLContext"), \
+         patch("hydra.services.subscriptions.server._ProxyTLSHTTPServer", side_effect=OSError("port busy")), \
+         pytest.raises(RuntimeError, match="port busy"):
+        run_standalone(MagicMock())

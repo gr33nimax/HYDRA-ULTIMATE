@@ -100,6 +100,9 @@ class ProtocolSetupService:
         plugin = self.get_plugin(name)
         if plugin is None:
             raise LookupError(f"Неизвестный протокол: {name}")
+        prepare_configuration = getattr(plugin, "prepare_configuration", None)
+        if callable(prepare_configuration):
+            prepare_configuration(state)
         capabilities = getattr(plugin.meta, "capabilities", None)
         if not isinstance(capabilities, PluginCapabilities):
             return

@@ -60,13 +60,17 @@ class ManagedNodeSyncOperations:
             if (
                 active.kind == "install"
                 and active.state == "running"
-                and active.error
-                and active.error.get("stage") == "apply"
+                and active.active_step is None
+                and (
+                    active.error and active.error.get("stage") == "apply"
+                    or {"bootstrap", "management_identity", "management_verified"}.issubset(active.completed_steps)
+                    and self._records.find_apply_intent(active.id) is not None
+                )
             ):
                 return active
             if active.kind == "apply":
                 return active
-            raise RuntimeError("another durable node operation is still active")
+            raise RuntimeError(f"node operation {active.id} ({active.kind}, {active.state}) is unresolved; resume it first")
         previous = next(
             (item.receipt for item in reversed(operations) if item.state == "succeeded" and item.receipt is not None),
             None,
@@ -118,11 +122,12 @@ class ManagedNodeSyncOperations:
                 notify_progress(progress, operation.id, "apply", "pending")
                 result = client.operation(operation.id, deadline)
             if result.state == "failed":
+                reason = bounded_error(result.error.get("reason", "remote apply failed") if result.error else "remote apply failed")
                 self.mark_failed(
                     operation.id,
-                    result.error.get("reason", "remote apply failed") if result.error else "remote apply failed",
+                    reason,
                 )
-                return result, "remote apply failed"
+                return result, reason
             if result.state == "recovery_required":
                 self._update_operation(
                     operation.id,
@@ -143,6 +148,15 @@ class ManagedNodeSyncOperations:
     def mark_running(self, operation_id: str, remote_error) -> None:
         current = self._records.find_operation(operation_id)
         active_step = None if current and current.kind == "install" else "remote_apply"
+        if current and current.kind == "install":
+            # This marker transfers ownership from SSH enrollment to apply.
+            # A pending remote operation with no error must not erase it.
+            remote_error = {
+                **(remote_error if isinstance(remote_error, dict) else {}),
+                "stage": "apply",
+                "reason": bounded_error(remote_error.get("reason", "remote apply is pending"))
+                if isinstance(remote_error, dict) else "remote apply is pending",
+            }
         self._update_operation(operation_id, "running", remote_error, active_step)
 
     def mark_pending(self, operation_id: str, reason: str) -> None:

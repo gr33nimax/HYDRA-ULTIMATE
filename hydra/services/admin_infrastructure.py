@@ -119,6 +119,11 @@ WantedBy=multi-user.target
 
         return find_any_cert(state)
 
+    def subscription_health(self, state: AppState) -> AdminCommandResult:
+        from hydra.services.subscription_health import subscription_health
+
+        return subscription_health(state, host=HOST)
+
     def subscription_public_host(self, state: AppState) -> str:
         from hydra.utils.net import public_ip
 

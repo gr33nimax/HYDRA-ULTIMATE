@@ -65,15 +65,21 @@ def _subscription_status(
     app: ApplicationService,
 ) -> tuple[str, str, str, str, bool]:
     active = app.admin.unit_active("hydra-sub")
-    status = (
-        f"{GREEN}🟢 АКТИВЕН{NC}"
-        if active
-        else f"{RED}🔴 НЕ АКТИВЕН{NC}"
-    )
-    cert_file, _key_file = app.admin.subscription_certificate(state)
+    if active:
+        health = app.admin.subscription_health(state)
+        reason = {
+            "no_certificate": "Нет SSL-сертификата",
+            "no_host": "Не настроен адрес подписок",
+            "backend_unavailable": "HTTPS на 9443 не отвечает",
+            "routing_unavailable": "Маршрут домена на 443 не отвечает",
+        }.get(health.code, "HTTPS не отвечает")
+        status = f"{GREEN}🟢 HTTPS ОТВЕЧАЕТ{NC}" if health.ok else f"{RED}🔴 {reason}{NC}"
+    else:
+        status = f"{RED}🔴 НЕ АКТИВЕН{NC}"
+    cert_file, key_file = app.admin.subscription_certificate(state)
     cert_status = (
         f"{GREEN}Установлен ({cert_file}){NC}"
-        if cert_file
+        if cert_file and key_file
         else f"{RED}Отсутствует (Необходим для HTTPS!){NC}"
     )
     sub_domain = getattr(state.network, "sub_domain", "")
@@ -87,7 +93,7 @@ def _subscription_status(
     if not sub_domain:
         base_url += ":9443"
     return status, cert_status, domain_status, f"{base_url}/sub/<UUID>", bool(
-        cert_file
+        cert_file and key_file
     )
 
 
@@ -103,9 +109,12 @@ def _start_subscription_server(
         )
         prompt("Нажмите Enter")
         return
-    install_sub_systemd_service(state, app)
+    if not install_sub_systemd_service(state, app):
+        error("Не удалось установить службу hydra-sub")
+        prompt("Нажмите Enter")
+        return
     if app.admin.start_unit("hydra-sub"):
-        success("Служба hydra-sub успешно запущена")
+        _report_subscription_health(state, app)
     else:
         error(
             "Не удалось запустить службу. "
@@ -124,6 +133,7 @@ def _stop_subscription_server(app: ApplicationService) -> None:
 
 
 def _restart_subscription_server(
+    state: AppState,
     app: ApplicationService,
     *,
     has_certificate: bool,
@@ -135,10 +145,22 @@ def _restart_subscription_server(
         prompt("Нажмите Enter")
         return
     if app.admin.restart_unit("hydra-sub"):
-        success("Служба hydra-sub успешно перезапущена")
+        _report_subscription_health(state, app)
     else:
         error("Не удалось перезапустить службу")
     prompt("Нажмите Enter")
+
+
+def _report_subscription_health(state: AppState, app: ApplicationService) -> None:
+    health = app.admin.subscription_health(state)
+    if health.code == "routing_unavailable" and app.admin.refresh_subscription_routing(state):
+        health = app.admin.subscription_health(state)
+    if health.ok:
+        success("Сервер подписок отвечает по HTTPS")
+    else:
+        error("Служба запущена, но HTTPS подписок недоступен")
+        if health.detail:
+            error(health.detail)
 
 
 def menu_subscription_server(state: AppState, app: ApplicationService):
@@ -198,6 +220,7 @@ def menu_subscription_server(state: AppState, app: ApplicationService):
             _stop_subscription_server(app)
         elif choice == "3":
             _restart_subscription_server(
+                state,
                 app,
                 has_certificate=has_certificate,
             )
