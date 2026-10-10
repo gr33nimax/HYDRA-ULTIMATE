@@ -324,7 +324,7 @@ def test_wait_timeout_keeps_same_operation_for_automatic_cycle(tmp_path):
     client.operation = still_running
     started = clock.monotonic()
     report = worker.sync("de-1")
-    assert clock.monotonic() - started == 60
+    assert clock.monotonic() - started == pytest.approx(60)
     assert report.nodes["de-1"]["error"] == CONFIRMATION_TIMEOUT
     assert report.pending_operations == ["apply-1"]
     assert worker._records.find_operation("apply-1").state == "running"
