@@ -167,3 +167,24 @@ def test_sync_report_includes_operation_and_actual_failure(monkeypatch):
         errors=["profile export failed"],
     ))
     assert captured == ["uk-1: failed", "Операция: apply-1", "Причина: profile export failed"]
+
+
+def test_awg_card_reports_configuration_when_native_connection_probe_is_unavailable(tmp_path):
+    now = datetime.now(timezone.utc)
+    state = AppState()
+    def update(mutate):
+        return state, mutate(state)
+    records = ManagedNodeRecords(state_reader=lambda: state, state_updater=update)
+    records.put_definition(NodeDefinition("uk-1", "UK", "203.0.113.4", "root", "dev", "a" * 40,
+                                         24443, [ProtocolAssignment("amneziawg")], "node/uk-1"))
+    observations = ManagedNodeObservationStore(host=HOST, root=tmp_path / "observations")
+    configuration = CheckResult("configuration", "uk-1", "ok", now.isoformat())
+    observations.write(NodeObservation(
+        "uk-1", CheckResult("management", "uk-1", "ok", now.isoformat()),
+        protocols={"amneziawg": {"configuration": configuration,
+            "connection": CheckResult("connection", "uk-1", "not_applicable", now.isoformat())}},
+        checked_at=now.isoformat(),
+    ))
+    view = ManagedNodeStatusService(records=records, observations=observations, state_reader=lambda: state).list()[0]
+    assert view.protocol_checks["amneziawg"] == configuration
+    assert "AmneziaWG: ✅ (конфигурация)" in render_node_card(view, now=now)

@@ -112,7 +112,7 @@ class ManagedNodeProfileBuilder:
     ) -> list[dict[str, Any]]:
         documents: list[dict[str, Any]] = []
         sources = [self._protocols.client_config(state, protocol, user, **parameters)]
-        sources.append(self._protocols.singbox_client_config(state, protocol, user))
+        sources.append(self._protocols.singbox_client_config(state, protocol, user, **parameters))
         for source in sources:
             try:
                 document = json.loads(source)

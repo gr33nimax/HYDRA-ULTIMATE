@@ -376,6 +376,10 @@ class BasePlugin(ABC):
     def client_link(self, user: User, state: PluginStateAccess) -> str:
         return ""
 
+    def generate_singbox_client_profile(self, user: User, state: PluginStateAccess, profile: str) -> str:
+        """Render one advertised variant without exporting its siblings."""
+        return self.generate_client_config(user, state, profile=profile)
+
     def client_links(
         self,
         user: User,

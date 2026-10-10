@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import copy
+import base64
 import hashlib
 import json
 import urllib.parse
+import struct
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -13,13 +16,13 @@ from typing import Any, Protocol
 from hydra.contracts.managed_node_observations import ConfirmedProfiles
 from hydra.core.configuration_names import (
     apply_json_configuration_name,
-    configuration_name_key,
     resolve_configuration_name,
 )
 from hydra.core.state_managed_nodes import managed_nodes_from_extensions
 from hydra.core.state_models import AppState, User
 from hydra.services.managed_nodes.profile_store import ManagedNodeProfileStore
 from hydra.services.user_access import access_status
+from hydra.services.security_intel import cached_country_flag
 
 
 @dataclass(frozen=True)
@@ -104,7 +107,7 @@ def _profiles_for_bundle(user: User, state: AppState, definition: object, bundle
         if profile.user_uuid != user.uuid or profile.protocol in user.disabled_protocols:
             continue
         key = node_profile_name_key(definition.id, profile.protocol, profile.route_id)
-        default = f"{definition.name} · {profile.protocol}" + (f" · {profile.route_id}" if profile.route_id != "direct" else "")
+        default = node_profile_default_name(definition, profile.protocol, profile.route_id)
         name = resolve_configuration_name(
             key=key,
             default=default,
@@ -135,10 +138,47 @@ def _named_config(document: dict[str, Any], *, key: str, name: str, user: User, 
 def _tag_link(link: str, name: str) -> str:
     try:
         parsed = urllib.parse.urlsplit(link)
+        if parsed.scheme.casefold() == "vpn":
+            return _named_amnezia_link(link, name)
         if parsed.scheme.casefold() in {"tt", "trusttunnel"}:
             return link
         return urllib.parse.urlunsplit(parsed._replace(fragment=urllib.parse.quote(name, safe="")))
     except ValueError:
+        return link
+
+
+def node_profile_default_name(definition, protocol: str, profile: str) -> str:
+    """Use the node's geography, never the base server's flag."""
+    flag = cached_country_flag(definition.address)
+    node_name = definition.name
+    if any("\U0001f1e6" <= character <= "\U0001f1ff" for character in node_name):
+        flag = ""
+    label = "AWG" if protocol == "amneziawg" else protocol
+    suffix = f" · {profile.title()}" if profile != "direct" else ""
+    return f"{flag} {node_name} · {label}{suffix}".strip()
+
+
+def _named_amnezia_link(link: str, name: str) -> str:
+    """Amnezia reads the compressed description, not the URI fragment."""
+    try:
+        encoded = urllib.parse.urlsplit(link).netloc
+        if len(encoded) > 131072:
+            return link
+        raw = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+        decoder = zlib.decompressobj()
+        payload = decoder.decompress(raw[4:], 262145)
+        if len(payload) > 262144 or not decoder.eof or decoder.unused_data:
+            return link
+        if len(raw) < 4 or struct.unpack(">I", raw[:4])[0] != len(payload):
+            return link
+        document = json.loads(payload)
+        if not isinstance(document, dict):
+            return link
+        document["description"] = name
+        payload = json.dumps(document, ensure_ascii=False, separators=(",", ":")).encode()
+        packed = struct.pack(">I", len(payload)) + zlib.compress(payload, level=8)
+        return "vpn://" + base64.urlsafe_b64encode(packed).rstrip(b"=").decode("ascii")
+    except (ValueError, TypeError, zlib.error, struct.error):
         return link
 
 

@@ -9,6 +9,7 @@ from hydra.core.state_models import AppState, User
 from hydra.plugins.base import PluginCategory
 from hydra.services.application import ApplicationService
 from hydra.services.subscriptions.links import tag_client_link
+from hydra.services.subscriptions.node_exports import node_profiles_for_user
 from hydra.services.subscriptions.generator import get_subscription_urls
 from hydra.services.user_access import access_status as get_user_access_status
 from hydra.ui._menus.users_common import _application
@@ -38,6 +39,7 @@ class _ClientArtifact:
     profile_label: str
     config: str
     links: tuple[str, ...]
+    name_key: str = ""
 
 
 def _profile_specs(
@@ -135,11 +137,19 @@ def _client_artifacts(
         )
         for artifact in manual_artifacts
     )
+    nodes = getattr(app, "nodes", None)
+    if nodes is not None:
+        for profile in node_profiles_for_user(user, state, node_exports=nodes):
+            artifacts.append(_ClientArtifact(
+                profile.protocol, profile.name, profile.profile, "",
+                json.dumps(profile.singbox[0], ensure_ascii=False, indent=2) if profile.singbox else "",
+                profile.links, profile.name_key,
+            ))
     return artifacts
 
 
 def _artifact_name_key(artifact: _ClientArtifact) -> str:
-    return f"{artifact.plugin_name}:{artifact.profile_name}" if artifact.profile_name else artifact.plugin_name
+    return artifact.name_key or (f"{artifact.plugin_name}:{artifact.profile_name}" if artifact.profile_name else artifact.plugin_name)
 
 
 def _artifact_title(

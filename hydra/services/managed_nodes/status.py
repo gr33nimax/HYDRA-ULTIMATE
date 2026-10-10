@@ -44,7 +44,9 @@ class ManagedNodeStatusService:
             protocol_checks = {}
             if observation is not None:
                 for name, checks in observation.protocols.items():
-                    result = checks.get("connection") or checks.get("configuration")
+                    result = checks.get("connection")
+                    if result is None or result.outcome == "not_applicable":
+                        result = checks.get("configuration")
                     if result is not None:
                         protocol_checks[name] = result
             sub_state = self._subscription_state(definition, state, related, observation)

@@ -50,7 +50,8 @@ def render_node_card(
             lines.append(f"{label}: —")
         else:
             state = "✅" if check.outcome == "ok" else "❌" if check.outcome == "error" else "—"
-            lines.append(f"{label}: {state}")
+            detail = " (конфигурация)" if check.kind == "configuration" else ""
+            lines.append(f"{label}: {state}{detail}")
             if check.outcome == "error" and check.reason:
                 lines.append(f"ошибка: {check.reason}")
     if view.operation and view.operation.state != "succeeded":
@@ -133,6 +134,7 @@ def _node_card(view: NodeView, app: ApplicationService) -> None:
             ("2", "Синхронизировать", "только выбранная нода"),
             ("3", "Диагностика", "management, runtime, SUB и реальные проверки"),
             ("4", "Удалить ноду", "только после штатного удаления на VPS"),
+            ("6", "Названия конфигураций", "общие имена и флаги профилей в подписках"),
         ]
         if _can_resume_install(view):
             options.append(("5", "Продолжить установку", "проверить незавершённый этап и применить конфигурацию"))
@@ -154,6 +156,9 @@ def _node_card(view: NodeView, app: ApplicationService) -> None:
                     return
             elif choice == "5" and _can_resume_install(view):
                 _resume_install(view, app)
+            elif choice == "6":
+                from hydra.ui._menus.users_names import edit_global_configuration_names
+                edit_global_configuration_names(app.admin.load_state(), app, node_id=view.definition.id)
         except Exception as exc:
             error(f"Операция не завершена: {_reason(exc)}")
         prompt("Enter — продолжить")

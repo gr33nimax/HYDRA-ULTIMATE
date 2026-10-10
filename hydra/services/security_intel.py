@@ -170,6 +170,17 @@ def lookup_ip(ip: str, *, now: float | None = None, cache_file: Path | None = No
     return dict(value) if isinstance(value, dict) else _fallback()
 
 
+def cached_country_flag(ip: str, *, cache_file: Path | None = None) -> str:
+    """Read server geography without network I/O in subscription requests."""
+    address = _address(ip)
+    if address is None:
+        return "🌐"
+    with _lock:
+        entry = _load_cache(cache_file or CACHE_FILE).get(address.compressed)
+    value = entry.get("value") if isinstance(entry, dict) else None
+    return country_flag(value.get("country_code", "")) if isinstance(value, dict) else "🌐"
+
+
 def lookup_region(ip: str, *, now: float | None = None, cache_file: Path | None = None) -> dict[str, str]:
     """Return where the address is: country, city, coordinates and IANA zone.
 
@@ -197,6 +208,7 @@ __all__ = [
     "NEGATIVE_TTL",
     "POSITIVE_TTL",
     "country_flag",
+    "cached_country_flag",
     "lookup_ip",
     "lookup_region",
     "notification_fields",

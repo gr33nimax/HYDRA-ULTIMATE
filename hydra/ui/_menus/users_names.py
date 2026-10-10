@@ -17,8 +17,12 @@ def edit_configuration_name(
     app: ApplicationService,
     *,
     global_scope: bool = False,
+    node_id: str = "",
 ) -> None:
     artifacts = _client_artifacts(state, user, app)
+    if node_id:
+        keys = {profile.name_key for profile in app.nodes.profiles_for_user(user, state) if profile.node_id == node_id}
+        artifacts = [artifact for artifact in artifacts if _artifact_name_key(artifact) in keys]
     if not artifacts:
         warn("Нет доступных конфигураций.")
         prompt("Нажмите Enter")
@@ -67,6 +71,8 @@ def edit_configuration_name(
 def edit_global_configuration_names(
     state: AppState,
     app: ApplicationService,
+    *,
+    node_id: str = "",
 ) -> None:
     user = next((item for item in state.users if not item.blocked), None)
     if user is None and state.users:
@@ -75,7 +81,7 @@ def edit_global_configuration_names(
         warn("Сначала добавьте пользователя, чтобы получить список конфигураций.")
         prompt("Нажмите Enter")
         return
-    edit_configuration_name(state, user, app, global_scope=True)
+    edit_configuration_name(state, user, app, global_scope=True, node_id=node_id)
 
 
 __all__ = ["edit_configuration_name", "edit_global_configuration_names"]

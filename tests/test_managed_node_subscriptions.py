@@ -39,7 +39,7 @@ def test_subscription_reads_only_committed_business_profiles_from_protected_stor
 
     assert len(exported) == 1
     assert exported[0].node_id == "de-1"
-    assert exported[0].links == ("vless://business@203.0.113.4:443#Germany%20%C2%B7%20vless",)
+    assert exported[0].links == ("vless://business@203.0.113.4:443#%F0%9F%8C%90%20Germany%20%C2%B7%20vless",)
     assert outsider == ()
 
 

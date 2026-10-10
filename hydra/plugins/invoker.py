@@ -194,6 +194,12 @@ class PluginInvoker:
         self._validate_version(plugin)
         return plugin.client_link(user, state, **kwargs) if self._can_issue(plugin, user) else ""
 
+    def generate_singbox_client_profile(
+        self, plugin: BasePlugin, user: User, state: PluginStateAccess, profile: str,
+    ) -> str:
+        self._validate_version(plugin)
+        return plugin.generate_singbox_client_profile(user, state, profile) if self._can_issue(plugin, user) else ""
+
     def client_links(
         self,
         plugin: BasePlugin,

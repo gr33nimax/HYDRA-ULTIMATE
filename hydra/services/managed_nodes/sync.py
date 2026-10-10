@@ -12,6 +12,7 @@ from typing import Any
 from hydra.contracts.managed_node_models import NodeDesired
 from hydra.contracts.managed_node_observations import CheckResult, DiagnosticReport, NodeSample, SyncReport
 from hydra.core.state_models import AppState
+from hydra.services.security_intel import lookup_ip
 from hydra.services.managed_nodes.accounting import apply_traffic_samples
 from hydra.services.managed_nodes.checks import ManagedNodeCheckService
 from hydra.services.managed_nodes.client import ManagedNodeError
@@ -155,6 +156,8 @@ class ManagedNodeSyncService:
                     checked_at,
                 )
             )
+            # Warm the shared geography cache outside subscription request handling.
+            lookup_ip(definition.address)
             return sample, ""
         except ManagedNodeError as exc:
             reason = bounded_error(exc.reason)

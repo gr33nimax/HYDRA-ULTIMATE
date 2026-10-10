@@ -232,6 +232,8 @@ def _base_subscription_links(
         link
         for profile in node_profiles_for_user(user, state, node_exports=node_exports)
         for link in profile.links
+        if not (profile.protocol == "amneziawg" and link.startswith("vpn://")
+                and any(candidate.startswith("wg://") for candidate in profile.links))
     ]
     links = [*formatted, *node_links]
     links.extend(converted for link in links if (converted := clean_link_to_sn(link, user)))

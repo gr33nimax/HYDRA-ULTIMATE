@@ -250,10 +250,12 @@ class ProtocolService:
             user,
             state.configuration_names,
         )
-        payload = self.invoker.generate_singbox_client_config(
-            plugin,
-            named_user if plugin.meta.name == "trusttunnel" else user,
-            state,
+        effective_user = named_user if plugin.meta.name == "trusttunnel" else user
+        profile = parameters.get("profile")
+        payload = (
+            self.invoker.generate_singbox_client_profile(plugin, effective_user, state, profile)
+            if isinstance(profile, str) and profile
+            else self.invoker.generate_singbox_client_config(plugin, effective_user, state)
         )
         return (
             apply_json_configuration_name(

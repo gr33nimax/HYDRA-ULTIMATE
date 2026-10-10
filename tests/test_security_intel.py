@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from hydra.services.security_intel import (
     country_flag,
+    cached_country_flag,
     lookup_ip,
     lookup_region,
     notification_fields,
@@ -36,6 +37,18 @@ class _Response:
 def test_country_code_is_rendered_as_flag():
     assert country_flag("DE") == "🇩🇪"
     assert country_flag("") == "🌐"
+
+
+def test_subscription_country_flag_reads_cache_without_network_or_writes(tmp_path):
+    cache = tmp_path / "cache.json"
+    with patch("hydra.services.security_intel.urllib.request.urlopen", side_effect=AssertionError("network")):
+        assert cached_country_flag("8.8.8.8", cache_file=cache) == "🌐"
+        assert not cache.exists()
+        cache.write_text(json.dumps({"8.8.8.8": {"value": {"country_code": "GB"}}}))
+        before = cache.read_bytes()
+        assert cached_country_flag("8.8.8.8", cache_file=cache) == "🇬🇧"
+        assert cached_country_flag("10.0.0.1", cache_file=cache) == "🌐"
+        assert cache.read_bytes() == before
 
 
 def test_lookup_is_cached_and_formats_owner(tmp_path):

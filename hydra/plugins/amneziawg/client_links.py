@@ -280,6 +280,7 @@ class AwgClientLinksMixin:
         self,
         user: User,
         state: PluginStateAccess,
+        profile: str | None = None,
     ) -> str:
         """Render every active profile as a sing-box-extended endpoint."""
         if not self._export_allowed(state, "singbox"):
@@ -293,11 +294,11 @@ class AwgClientLinksMixin:
         )
         endpoints = []
         for profile_name in ("desktop", "mobile"):
-            if profile_name not in active_names:
+            if profile_name not in active_names or (profile is not None and profile_name != profile):
                 continue
-            profile = self._client_profile(user, state, profile_name)
-            if profile is not None:
-                endpoints.append(self._singbox_endpoint(profile, user))
+            data = self._client_profile(user, state, profile_name)
+            if data is not None:
+                endpoints.append(self._singbox_endpoint(data, user))
         if not endpoints:
             return ""
         return json.dumps(
@@ -307,6 +308,9 @@ class AwgClientLinksMixin:
             },
             ensure_ascii=False,
         )
+
+    def generate_singbox_client_profile(self, user: User, state: PluginStateAccess, profile: str) -> str:
+        return self.generate_singbox_client_config(user, state, profile=profile)
 
     def client_link(
         self,
