@@ -169,6 +169,22 @@ def test_sync_report_includes_operation_and_actual_failure(monkeypatch):
     assert captured == ["uk-1: Ошибка", "Операция: apply-1", "Причина: profile export failed"]
 
 
+def test_confirmation_timeout_report_explains_automatic_resume(monkeypatch):
+    from hydra.contracts.managed_node_observations import SyncReport
+    from hydra.services.managed_nodes.sync_operations import CONFIRMATION_TIMEOUT
+    from hydra.ui._menus import managed_nodes
+    captured = []
+    monkeypatch.setattr(managed_nodes, "panel", lambda title, lines, **kwargs: captured.extend(lines))
+    managed_nodes._show_report("НАСТРОЙКИ ПРОТОКОЛА", SyncReport(
+        {"uk-1": {"status": "pending", "operation_id": "apply-1", "error": CONFIRMATION_TIMEOUT}},
+        pending_operations=["apply-1"],
+    ))
+    assert "Операция: apply-1" in captured
+    assert any("не подтвердила" in line for line in captured)
+    assert any("автоматическая синхронизация" in line for line in captured)
+    assert CONFIRMATION_TIMEOUT not in str(captured)
+
+
 def test_awg_card_reports_configuration_when_native_connection_probe_is_unavailable(tmp_path):
     now = datetime.now(timezone.utc)
     state = AppState()

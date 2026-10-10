@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import secrets
+import time
 from collections.abc import Callable
 
 from hydra.contracts.managed_node_models import ApplyReceipt, NodeDesired, Operation
@@ -12,6 +13,8 @@ from hydra.services.managed_nodes.records import ManagedNodeRecords
 from hydra.utils.commands import redact_text
 
 _ACTIVE = {"pending", "running", "recovery_required"}
+CONFIRMATION_TIMEOUT = "node confirmation deadline expired"
+_RETRYABLE_READ_ERRORS = {"timeout", "tcp_failed", "http_failed", "not_found"}
 
 
 class ManagedNodeSyncOperations:
@@ -23,10 +26,14 @@ class ManagedNodeSyncOperations:
         records: ManagedNodeRecords,
         observations: ManagedNodeObservationStore,
         operation_id_factory: Callable[[], str] = lambda: secrets.token_hex(16),
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._records = records
         self._observations = observations
         self._new_operation_id = operation_id_factory
+        self._clock = monotonic
+        self._sleep = sleep
 
     def operation_desired(self, operation: Operation, current: NodeDesired) -> NodeDesired:
         if operation.kind == "install":
@@ -103,24 +110,58 @@ class ManagedNodeSyncOperations:
         progress=None,
     ) -> tuple[Operation | None, str]:
         try:
+            if self._clock() >= deadline:
+                self.mark_pending(operation.id, CONFIRMATION_TIMEOUT)
+                return None, CONFIRMATION_TIMEOUT
             try:
-                result = client.operation(operation.id, deadline)
+                result = client.operation(operation.id, self._request_deadline(deadline))
             except ManagedNodeError as exc:
                 if exc.kind != "not_found":
                     self.mark_pending(operation.id, bounded_error(exc))
-                    return None, bounded_error(exc)
-                result = client.submit(operation.id, desired, deadline)
-            if (
-                result.id != operation.id
-                or result.target_id != node_id
-                or result.desired_digest != desired.digest
-                or result.kind != "apply"
-            ):
-                raise ValueError("remote operation identity does not match")
-            if result.state in {"pending", "running", "recovery_required"}:
-                self.mark_running(operation.id, result.error)
-                notify_progress(progress, operation.id, "apply", "pending")
-                result = client.operation(operation.id, deadline)
+                    if exc.kind not in _RETRYABLE_READ_ERRORS:
+                        return None, bounded_error(exc)
+                    result = None
+                else:
+                    try:
+                        result = client.submit(operation.id, desired, self._request_deadline(deadline))
+                    except ManagedNodeError as send_error:
+                        if send_error.kind not in {"timeout", "tcp_failed", "http_failed"}:
+                            raise
+                        # The POST may have reached the node. Only read this ID now;
+                        # an ambiguous response must never trigger another POST here.
+                        self.mark_pending(operation.id, bounded_error(send_error))
+                        result = None
+            notified = False
+            while True:
+                if result is not None:
+                    if (
+                        result.id != operation.id
+                        or result.target_id != node_id
+                        or result.desired_digest != desired.digest
+                        or result.kind != "apply"
+                    ):
+                        raise ValueError("remote operation identity does not match")
+                    if result.state not in {"pending", "running"}:
+                        break
+                    self.mark_running(operation.id, result.error)
+                if not notified:
+                    notify_progress(progress, operation.id, "apply", "pending")
+                    notified = True
+                remaining = deadline - self._clock()
+                if remaining <= 0:
+                    self.mark_pending(operation.id, CONFIRMATION_TIMEOUT)
+                    return result, CONFIRMATION_TIMEOUT
+                self._sleep(min(0.5, remaining))
+                if self._clock() >= deadline:
+                    self.mark_pending(operation.id, CONFIRMATION_TIMEOUT)
+                    return result, CONFIRMATION_TIMEOUT
+                try:
+                    result = client.operation(operation.id, self._request_deadline(deadline))
+                except ManagedNodeError as read_error:
+                    if read_error.kind not in _RETRYABLE_READ_ERRORS:
+                        raise
+                    self.mark_pending(operation.id, bounded_error(read_error))
+                    result = None
             if result.state == "failed":
                 reason = bounded_error(result.error.get("reason", "remote apply failed") if result.error else "remote apply failed")
                 self.mark_failed(
@@ -144,6 +185,9 @@ class ManagedNodeSyncOperations:
             reason = bounded_error(exc)
             self.mark_pending(operation.id, reason)
             return None, reason
+
+    def _request_deadline(self, deadline: float) -> float:
+        return min(deadline, self._clock() + 10.0)
 
     def mark_running(self, operation_id: str, remote_error) -> None:
         current = self._records.find_operation(operation_id)
@@ -201,22 +245,22 @@ class ManagedNodeSyncOperations:
             error_document = error
         else:
             error_document = None
-        self._records.update_operation(
-            Operation(
-                current.id,
-                current.kind,
-                current.target_id,
-                current.desired_digest,
-                state,
-                list(current.completed_steps),
-                error_document,
-                current.receipt,
-                current.plan,
-                current.remote_removal_confirmed,
-                active_step,
-                current.existing_reinstall_confirmed,
-            )
+        updated = Operation(
+            current.id,
+            current.kind,
+            current.target_id,
+            current.desired_digest,
+            state,
+            list(current.completed_steps),
+            error_document,
+            current.receipt,
+            current.plan,
+            current.remote_removal_confirmed,
+            active_step,
+            current.existing_reinstall_confirmed,
         )
+        if updated != current:
+            self._records.update_operation(updated)
 
 
 def notify_progress(callback, operation_id: str, step: str, state: str) -> None:

@@ -14,7 +14,7 @@ from hydra.ui._menus.node_protocol_fields import (
 )
 from hydra.ui._menus.users_names import edit_global_configuration_names
 from hydra.ui.protocol_ui import protocol_label
-from hydra.ui.tui import confirm, error, menu, success
+from hydra.ui.tui import confirm, error, info, menu, success
 
 ReportRenderer = Callable[[str, Any], None]
 
@@ -61,6 +61,7 @@ def _protocol_settings(
         elif choice == "3" and confirm(
             f"Удалить {label} на ноде {view.definition.name}? Его профили исчезнут из подписок.", default=False,
         ):
+            info("Отключаю протокол. Ожидаю подтверждение ноды — до 60 секунд.")
             report = app.nodes.remove_protocol(view.definition.id, assignment.name, confirmed=True)
             show_report("УДАЛЕНИЕ ПРОТОКОЛА", report)
             return True
@@ -97,6 +98,7 @@ def _edit_protocol(
         return False
     if not confirm(f"Применить настройки {protocol_label(before.name)} на ноде {view.definition.name}?", default=False):
         return False
+    info("Применяю настройки. Ожидаю подтверждение ноды — до 60 секунд.")
     report = app.nodes.configure_protocol(view.definition.id, ProtocolAssignment(before.name, parameters), confirmed=True)
     if report is not None:
         show_report("НАСТРОЙКИ ПРОТОКОЛА", report)

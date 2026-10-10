@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import secrets
+import math
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -42,9 +43,21 @@ class ManagedNodeSyncService:
         local_user_sync: Callable[[], tuple[AppState, dict[str, str], list[str]]],
         operation_id_factory: Callable[[], str] = lambda: secrets.token_hex(16),
         max_parallel_nodes: int = 4,
+        apply_timeout_seconds: float = 60.0,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if type(max_parallel_nodes) is not int or not 1 <= max_parallel_nodes <= 8:
             raise ValueError("managed-node sync concurrency must be 1..8")
+        if (
+            isinstance(apply_timeout_seconds, bool)
+            or not isinstance(apply_timeout_seconds, (int, float))
+            or not math.isfinite(apply_timeout_seconds)
+            or not 0 < apply_timeout_seconds <= 300
+        ):
+            raise ValueError("managed-node apply timeout must be finite and in (0, 300] seconds")
+        self._apply_timeout = float(apply_timeout_seconds)
+        self._clock = monotonic
         self._records = records
         self._state_reader = state_reader
         self._state_updater = state_updater
@@ -57,6 +70,8 @@ class ManagedNodeSyncService:
             records=records,
             observations=observations,
             operation_id_factory=operation_id_factory,
+            monotonic=monotonic,
+            sleep=sleep,
         )
         self._parallel = max_parallel_nodes
         self._locks_guard = threading.Lock()
@@ -211,7 +226,7 @@ class ManagedNodeSyncService:
             if sample is None:
                 return {"status": "failed", "error": "management response is unavailable"}
             client = self._client_factory(definition)
-            deadline = time.monotonic() + 10.0
+            deadline = self._clock() + self._apply_timeout
             while True:
                 desired = build_node_desired(definition, self._state_reader(), self._records)
                 operation = self._apply_operations.operation_for(definition.id, desired)
@@ -251,7 +266,7 @@ class ManagedNodeSyncService:
                     )
                     return {"status": "failed", "operation_id": operation.id, "error": "apply receipt mismatch"}
                 try:
-                    confirmed_sample = client.state(deadline)
+                    confirmed_sample = client.state(min(deadline, self._clock() + 10.0))
                     if (
                         not isinstance(confirmed_sample, NodeSample)
                         or confirmed_sample.node_id != definition.id
@@ -260,7 +275,7 @@ class ManagedNodeSyncService:
                         or confirmed_sample.runtime.get("engine_active") is not True
                     ):
                         raise ValueError("remote runtime does not confirm the apply receipt")
-                    bundle = client.profiles(deadline)
+                    bundle = client.profiles(min(deadline, self._clock() + 10.0))
                     if bundle.node_id != definition.id or bundle.receipt != receipt:
                         raise ValueError("confirmed profile response does not match the apply receipt")
                     _validate_profile_coverage(bundle, apply_desired)

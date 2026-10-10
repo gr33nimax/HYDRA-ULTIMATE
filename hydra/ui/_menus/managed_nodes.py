@@ -10,9 +10,10 @@ from typing import Any, Mapping
 from hydra.contracts.managed_node_models import CascadeDefinition
 from hydra.contracts.managed_node_observations import DiagnosticReport, NodeView
 from hydra.services.application import ApplicationService
+from hydra.services.managed_nodes.sync_operations import CONFIRMATION_TIMEOUT
 from hydra.ui._menus.nodes_setup import install_node
 from hydra.ui.protocol_ui import protocol_label
-from hydra.ui.tui import ask, ask_secret, clear, confirm, error, kv, menu, panel, prompt, success
+from hydra.ui.tui import ask, ask_secret, clear, confirm, error, info, kv, menu, panel, prompt, success
 
 
 _SUB_LABELS = {
@@ -150,6 +151,7 @@ def _node_card(view: NodeView, app: ApplicationService) -> None:
             if choice == "1":
                 _protocols(view, app)
             elif choice == "2":
+                info("Синхронизирую ноду. Ожидаю подтверждение применения — до 60 секунд.")
                 report = app.nodes.sync(view.definition.id)
                 _show_report("СИНХРОНИЗАЦИЯ", report)
             elif choice == "3":
@@ -325,7 +327,7 @@ def _show_report(title: str, report: Any) -> None:
     if hasattr(report, "state"):
         lines = [f"Операция: {report.id}", f"Состояние: {_STATE_LABELS.get(report.state, report.state)}"]
         if report.error:
-            lines.append(f"{report.error.get('stage')}: {report.error.get('reason')}")
+            lines.append(f"{report.error.get('stage')}: {_reason(report.error.get('reason', ''))}")
         panel(title, lines, wrap=True)
         return
     if hasattr(report, "nodes"):
@@ -336,7 +338,9 @@ def _show_report(title: str, report: Any) -> None:
             if value.get("operation_id"):
                 lines.append(f"Операция: {value['operation_id']}")
             if value.get("error"):
-                lines.append(f"Причина: {value['error']}")
+                lines.append(f"Причина: {_reason(value['error'])}")
+            if status == "pending" and value.get("operation_id"):
+                lines.append("Операция сохранена. Следующая автоматическая синхронизация проверит её результат.")
         shown_errors = {value.get("error") for value in report.nodes.values()}
         lines.extend(item for item in report.errors if item not in shown_errors)
         panel(title, lines or ["Нет новых данных"], wrap=True)
@@ -344,9 +348,11 @@ def _show_report(title: str, report: Any) -> None:
     panel(title, [str(report)], wrap=True)
 
 
-def _reason(exc: Exception) -> str:
+def _reason(exc: object) -> str:
     reason = str(exc) if str(exc) else type(exc).__name__
     return {
+        CONFIRMATION_TIMEOUT:
+            "За время ожидания нода не подтвердила применение изменений.",
         "remove or reconfigure affected cascades before changing this node":
             "Нода используется в каскадах. Сначала удалите их, затем измените протоколы.",
         "managed-node target already has an active operation":

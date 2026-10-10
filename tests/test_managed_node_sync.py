@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import time
 from pathlib import Path
+from dataclasses import replace
 from typing import Any, cast
 
 import pytest
@@ -28,6 +29,20 @@ from hydra.services.managed_nodes.probe_clients import ManagedNodeProbeClient
 from hydra.services.managed_nodes.profile_store import ManagedNodeProfileStore
 from hydra.services.managed_nodes.records import ManagedNodeRecords
 from hydra.services.managed_nodes.sync import ManagedNodeSyncService
+from hydra.services.managed_nodes.sync_operations import CONFIRMATION_TIMEOUT
+
+
+class Clock:
+    def __init__(self):
+        self.current = time.monotonic()
+        self.sleeps = []
+
+    def monotonic(self):
+        return self.current
+
+    def sleep(self, seconds):
+        self.sleeps.append(seconds)
+        self.current += seconds
 
 
 def desired(*, blocked: bool = False, disabled: list[str] | None = None, port: int = 443) -> NodeDesired:
@@ -49,7 +64,7 @@ def test_pending_remote_apply_preserves_install_handoff(tmp_path: Path):
     result, error = worker._apply_operations.remote_apply(
         worker._client_factory(None), "de-1", operation, frozen, deadline=time.monotonic() + 10,
     )
-    assert result is not None and result.state == "running" and not error
+    assert result is not None and result.state == "running" and error == CONFIRMATION_TIMEOUT
     current = worker._records.find_operation(operation.id)
     assert current is not None and current.error is not None
     assert current.error["stage"] == "apply"
@@ -90,7 +105,8 @@ def test_remote_apply_failure_keeps_reason_in_targeted_report(tmp_path: Path):
     assert error == "AWG profile missing"
 
 
-def service(tmp_path: Path, operation: Operation, client: Client):
+def service(tmp_path: Path, operation: Operation, client: Client, *, clock=None):
+    clock = clock or Clock()
     state = AppState()
 
     def update(mutate):
@@ -119,6 +135,8 @@ def service(tmp_path: Path, operation: Operation, client: Client):
         checks=checks,
         local_user_sync=lambda: (state, {}, []),
         operation_id_factory=lambda: "apply-new",
+        monotonic=clock.monotonic,
+        sleep=clock.sleep,
     )
 
 
@@ -189,6 +207,175 @@ class UnknownSendClient(Client):
             users_digest=canonical_digest([]),
             runtime={"engine_active": True, "apply_generation": "engine-generation"},
         )
+
+
+class CompletingClient(Client):
+    """The agent acknowledges a POST before its asynchronous apply finishes."""
+    def __init__(self, candidate, *, final_state="succeeded", lost_send_reply=False):
+        super().__init__(candidate)
+        self.reads = 0
+        self.final_state = final_state
+        self.lost_send_reply = lost_send_reply
+        self.request_deadlines = []
+        self.receipt = None
+
+    def operation(self, operation_id, deadline):
+        self.request_deadlines.append(deadline)
+        self.calls.append(("operation", operation_id))
+        self.reads += 1
+        if not self.submitted:
+            raise ManagedNodeError("not_found", "http", "not found")
+        if self.reads < 5:
+            return Operation(operation_id, "apply", "de-1", self.old.digest, "running")
+        if self.final_state != "succeeded":
+            return Operation(operation_id, "apply", "de-1", self.old.digest, self.final_state,
+                             error={"stage": "apply", "reason": "cannot confirm runtime"})
+        self.receipt = ApplyReceipt(operation_id, self.old.revision, self.old.digest,
+                                    "engine-generation", self.old.users_digest, canonical_digest([]))
+        return Operation(operation_id, "apply", "de-1", self.old.digest, "succeeded", receipt=self.receipt)
+
+    def submit(self, operation_id, candidate, deadline):
+        self.request_deadlines.append(deadline)
+        result = super().submit(operation_id, candidate, deadline)
+        if self.lost_send_reply:
+            raise ManagedNodeError("http_failed", "http", "connection closed after sending")
+        return result
+
+    def sync_sample(self, deadline):
+        return NodeSample("de-1", users_applied=0, users_digest=canonical_digest([]),
+                          runtime={"engine_active": True, "apply_generation": "engine-generation"})
+
+    def state(self, deadline):
+        self.calls.append(("state", "de-1"))
+        return replace(self.sync_sample(deadline), receipt=self.receipt)
+
+    def profiles(self, deadline):
+        self.calls.append(("profiles", "de-1"))
+        return ConfirmedProfiles("de-1", self.receipt, [], canonical_digest([]))
+
+
+def completing_service(tmp_path, *, final_state="succeeded", lost_send_reply=False):
+    frozen = NodeDesired("de-1", 1, [], [])
+    operation = Operation("apply-1", "apply", "de-1", frozen.digest, "pending", plan=frozen.to_document())
+    clock = Clock()
+    client = CompletingClient(frozen, final_state=final_state, lost_send_reply=lost_send_reply)
+    worker = service(tmp_path, operation, client, clock=clock)
+    worker._records.put_definition(NodeDefinition("de-1", "Germany", "203.0.113.4", "root", "dev", "a" * 40,
+                                                  25555, [], "managed-node/de-1"))
+    return worker, client, clock
+
+
+@pytest.mark.parametrize("lost_send_reply", [False, True])
+def test_one_sync_waits_for_async_apply_and_commits_profiles_before_return(tmp_path, lost_send_reply):
+    worker, client, clock = completing_service(tmp_path, lost_send_reply=lost_send_reply)
+    started = clock.monotonic()
+    events = []
+    report = worker.sync("de-1", progress=events.append)
+
+    assert report.nodes["de-1"]["status"] == "ok"
+    assert not report.pending_operations
+    assert client.reads == 5
+    assert len(client.submitted) == 1
+    assert 0 < clock.monotonic() - started < 60
+    assert all(started < deadline <= clock.monotonic() + 10 for deadline in client.request_deadlines)
+    committed = worker._records.find_operation("apply-1")
+    assert committed.state == "succeeded" and committed.receipt == client.receipt
+    bundle = worker._profile_store.read("de-1", receipt_is_committed=lambda item: item.receipt == committed.receipt)
+    assert bundle is not None and bundle.receipt == client.receipt
+    assert client.calls[-2:] == [("state", "de-1"), ("profiles", "de-1")]
+    assert [event["state"] for event in events] == ["pending", "succeeded"]
+
+
+@pytest.mark.parametrize("final_state", ["failed", "recovery_required"])
+def test_wait_returns_immediately_on_terminal_node_failure(tmp_path, final_state):
+    worker, client, clock = completing_service(tmp_path, final_state=final_state)
+    started = clock.monotonic()
+    report = worker.sync("de-1")
+    assert report.nodes["de-1"]["status"] == ("failed" if final_state == "failed" else "pending")
+    assert worker._records.find_operation("apply-1").state == final_state
+    assert client.reads == 5 and clock.monotonic() - started < 60
+    assert not any(method in {"state", "profiles"} for method, _target in client.calls)
+
+
+@pytest.mark.parametrize("field,value", [("id", "other-operation"), ("target_id", "other-node"),
+                                        ("desired_digest", "b" * 64), ("kind", "install")])
+def test_each_polled_response_must_match_the_frozen_operation(tmp_path, field, value):
+    worker, client, _clock = completing_service(tmp_path)
+    original = client.operation
+    def changed(operation_id, deadline):
+        result = original(operation_id, deadline)
+        return replace(result, **{field: value}) if client.reads == 3 else result
+    client.operation = changed
+    report = worker.sync("de-1")
+    assert report.nodes["de-1"]["status"] == "pending"
+    assert "identity does not match" in report.nodes["de-1"]["error"]
+    assert client.reads == 3 and len(client.submitted) == 1
+    assert worker._records.find_operation("apply-1").state != "succeeded"
+
+
+def test_wait_timeout_keeps_same_operation_for_automatic_cycle(tmp_path):
+    worker, client, clock = completing_service(tmp_path)
+    original = client.operation
+    def still_running(operation_id, deadline):
+        client.calls.append(("operation", operation_id))
+        if not client.submitted:
+            raise ManagedNodeError("not_found", "http", "not found")
+        return Operation(operation_id, "apply", "de-1", client.old.digest, "running")
+    client.operation = still_running
+    started = clock.monotonic()
+    report = worker.sync("de-1")
+    assert clock.monotonic() - started == 60
+    assert report.nodes["de-1"]["error"] == CONFIRMATION_TIMEOUT
+    assert report.pending_operations == ["apply-1"]
+    assert worker._records.find_operation("apply-1").state == "running"
+    frozen = worker._records.find_apply_intent("apply-1")
+
+    client.operation = original
+    _state, _blocked, errors = worker.run_cycle(lambda: (worker._state_reader(), {}, []))
+    assert errors == []
+    assert len(client.submitted) == 1
+    assert worker._records.find_operation("apply-1").state == "succeeded"
+    assert worker._records.find_apply_intent("apply-1") == frozen
+
+
+@pytest.mark.parametrize("mismatch", ["runtime", "profiles"])
+def test_remote_success_is_not_local_success_without_runtime_and_profiles(tmp_path, mismatch):
+    worker, client, _clock = completing_service(tmp_path)
+    if mismatch == "runtime":
+        state = client.state
+        client.state = lambda deadline: replace(state(deadline), runtime={"engine_active": False})
+    else:
+        profiles = client.profiles
+        client.profiles = lambda deadline: replace(profiles(deadline), node_id="another-node")
+    report = worker.sync("de-1")
+    assert report.nodes["de-1"]["status"] == "pending"
+    assert worker._records.find_operation("apply-1").state != "succeeded"
+    assert worker._profile_store.read("de-1", receipt_is_committed=lambda _bundle: True) is None
+
+
+@pytest.mark.parametrize("error_kind", ["http_failed", "not_found", "identity_mismatch"])
+def test_poll_read_errors_never_resubmit_and_identity_errors_stop_waiting(tmp_path, error_kind):
+    worker, client, _clock = completing_service(tmp_path)
+    original = client.operation
+    def interrupted(operation_id, deadline):
+        result = original(operation_id, deadline)
+        if client.reads == 3:
+            raise ManagedNodeError(error_kind, "http" if error_kind != "identity_mismatch" else "tls", "read failed")
+        return result
+    client.operation = interrupted
+    report = worker.sync("de-1")
+    assert len(client.submitted) == 1
+    assert report.nodes["de-1"]["status"] == ("pending" if error_kind == "identity_mismatch" else "ok")
+    assert client.reads == (3 if error_kind == "identity_mismatch" else 5)
+
+
+def test_expired_wait_does_not_send_another_request(tmp_path):
+    worker, client, _clock = completing_service(tmp_path)
+    operation = worker._records.find_operation("apply-1")
+    result, error = worker._apply_operations.remote_apply(client, "de-1", operation, client.old,
+                                                          deadline=worker._clock())
+    assert result is None and error == CONFIRMATION_TIMEOUT
+    assert client.calls == []
 
 
 def test_counter_sample_endpoint_is_explicit_and_state_get_remains_read_only():
@@ -334,10 +521,11 @@ def test_active_operation_is_polled_with_its_frozen_desired_even_when_current_st
         deadline=time.monotonic() + 10.0,
     )
 
-    assert error == ""
+    assert error == CONFIRMATION_TIMEOUT
     assert remote is not None and remote.desired_digest == frozen.digest
     assert client.submitted == [("apply-old", frozen)]
-    assert client.calls == [("operation", "apply-old"), ("submit", "apply-old"), ("operation", "apply-old")]
+    assert client.calls[:2] == [("operation", "apply-old"), ("submit", "apply-old")]
+    assert all(call == ("operation", "apply-old") for call in client.calls[2:])
 
 
 def test_install_apply_intent_is_frozen_durably_across_retry(tmp_path: Path):
@@ -406,9 +594,9 @@ def test_unknown_submit_outcome_retries_by_frozen_id_without_blind_resubmit(tmp_
         "de-1",
         operation,
         frozen,
-        deadline=time.monotonic() + 10.0,
+        deadline=worker._clock() + 0.5,
     )
-    assert first is None and "unknown" in first_error
+    assert first is None and first_error == CONFIRMATION_TIMEOUT
     pending = worker._records.find_operation(operation.id)
     assert pending is not None and pending.state == "running"
 
@@ -417,7 +605,7 @@ def test_unknown_submit_outcome_retries_by_frozen_id_without_blind_resubmit(tmp_
         "de-1",
         pending,
         frozen,
-        deadline=time.monotonic() + 10.0,
+        deadline=worker._clock() + 10.0,
     )
 
     assert error == ""

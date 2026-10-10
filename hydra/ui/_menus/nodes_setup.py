@@ -11,7 +11,7 @@ from hydra.contracts.managed_node_models import Operation, ProtocolAssignment
 from hydra.services.managed_nodes.credentials import SshPasswordChannel
 from hydra.ui._menus.node_protocol_fields import PROTOCOL_FIELDS, collect_protocol_config
 from hydra.ui.protocol_ui import protocol_label
-from hydra.ui.tui import ask, ask_secret, confirm, error, kv, menu, panel, success
+from hydra.ui.tui import ask, ask_secret, confirm, error, info, kv, menu, panel, success
 
 def _required(label: str, default: str = "") -> str | None:
     value = ask(label, default)
@@ -155,7 +155,10 @@ def _progress(event: dict[str, str]) -> None:
     step = event.get("step")
     reason = event.get("reason", "")
     if state == "succeeded":
-        success(f"Этап {step} подтверждён")
+        success("Нода подтвердила применение настроек и обновление профилей." if step == "apply"
+                else f"Этап {step} подтверждён")
+    elif state == "pending" and step == "apply":
+        info("Ожидаю подтверждение применения настроек нодой — до 60 секунд.")
     elif state in {"failed", "recovery_required"}:
         error(f"Этап {step}: {reason or state}")
 
