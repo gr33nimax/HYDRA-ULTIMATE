@@ -19,7 +19,7 @@ from hydra.services.protocols import ProtocolService
 from hydra.services.subscriptions.hydrabox import generate_hydrabox_subscription
 from hydra.services.subscriptions.links import generate_base64_sub
 from hydra.services.subscriptions.node_exports import _profiles_for_bundle, _tag_link, node_profile_name_key
-from hydra.ui._menus.users_links import _artifact_name_key, _client_artifacts
+from hydra.ui._menus.users_links import _artifact_name_key, _client_artifacts, _render_inline_artifact
 from hydra.ui._menus.users_names import edit_configuration_name
 
 
@@ -126,3 +126,19 @@ def test_subscription_retains_amnezia_fallback_when_wg_import_is_unavailable(exp
     plugins = SimpleNamespace(enabled_transports=lambda state: [], get=lambda name: None)
     links = base64.b64decode(generate_base64_sub(state.users[0], state, plugins=plugins, node_exports=reader)).decode().splitlines()
     assert len(links) == 1 and links[0].startswith("vpn://")
+
+
+def test_manual_node_links_keep_node_names_instead_of_base_names(exported_node, capsys):
+    state, definition, bundle = exported_node
+    profiles = tuple(_profiles_for_bundle(state.users[0], state, definition, bundle))
+    protocols = MagicMock()
+    protocols.enabled_subscription_names.return_value = []
+    protocols.manual_client_artifacts.return_value = []
+    state.configuration_names["amneziawg:desktop"] = "Основа"
+    app = SimpleNamespace(protocols=protocols, nodes=SimpleNamespace(profiles_for_user=lambda user, state: profiles),
+                          configuration_names=ConfigurationNameService())
+    artifact = _client_artifacts(state, state.users[0], app)[0]
+    _render_inline_artifact(artifact, state, state.users[0], app)
+    output = capsys.readouterr().out
+    assert all(link in output for link in artifact.links)
+    assert "Основа" not in output

@@ -213,7 +213,7 @@ def _render_inline_artifact(
     )
     for link in artifact.links:
         print(f"  {GREEN}{_link_caption(link)}:{NC}")
-        print(tag_client_link(link, user, state) if user and state else link)
+        print(tag_client_link(link, user, state) if user and state and not artifact.name_key else link)
     config = _manual_config(artifact)
     if config:
         print(f"  {DIM}{'─' * PANEL_W}{NC}")
