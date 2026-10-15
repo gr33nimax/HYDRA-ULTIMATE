@@ -1,4 +1,5 @@
 """HTTPS adapter for serving generated subscriptions."""
+
 from __future__ import annotations
 
 import json
@@ -12,6 +13,7 @@ from hydra.core.state import load_state
 from hydra.core.state_models import AppState
 from hydra.services.subscriptions.access import SubscriptionPluginAccess
 from hydra.services.subscriptions.certificates import find_any_cert
+from hydra.services.subscriptions.clash import generate_clash_config
 from hydra.services.subscriptions.client_configs import (
     generate_nekobox_sub,
     generate_singbox_config,
@@ -34,6 +36,7 @@ from hydra.services.subscriptions.jwe import (
 )
 from hydra.services.subscriptions.links import (
     generate_base64_sub,
+    generate_happ_sub,
     generate_shadowrocket_sub,
 )
 from hydra.services.subscriptions.node_exports import ManagedNodeProfileReader
@@ -46,15 +49,12 @@ from hydra.services.subscriptions.metadata import (
 
 
 class HeaderReader(Protocol):
-    def get(self, name: str, failobj: str | None = None) -> str | None: ...
+    def get(self, name: str, /) -> str | None: ...
 
 
 def _fingerprint_headers(headers: HeaderReader) -> dict[str, str]:
     """Project only identity headers into the transport-neutral contract."""
-    return {
-        name: str(headers.get(name, "") or "")
-        for name in ("User-Agent", *HWID_HEADERS)
-    }
+    return {name: str(headers.get(name) or "") for name in ("User-Agent", *HWID_HEADERS)}
 
 
 class SubscriptionHandler(BaseHTTPRequestHandler):
@@ -92,6 +92,21 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
         plugins: SubscriptionPluginAccess,
         node_exports: ManagedNodeProfileReader | None = None,
     ) -> tuple[str, str, str]:
+        if response_format == "clash":
+            # JSON is a YAML 1.2 subset, accepted by Mihomo without a YAML dependency.
+            return (
+                json.dumps(
+                    generate_clash_config(user, state, plugins=plugins, node_exports=node_exports), ensure_ascii=False
+                ),
+                "application/yaml; charset=utf-8",
+                "clash.yaml",
+            )
+        if response_format == "happ":
+            return (
+                generate_happ_sub(user, state, plugins=plugins, node_exports=node_exports),
+                "text/plain; charset=utf-8",
+                "happ.txt",
+            )
         if response_format == "nekobox":
             return (
                 generate_nekobox_sub(
@@ -182,9 +197,7 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
         parameters = urllib.parse.parse_qs(request.query)
         requested_format = parameters.get("format", [None])[0]
         accepted = self.headers.get("Accept", "").lower()
-        if not requested_format and (
-            HYDRABOX_MEDIA_TYPE in accepted or JWE_MEDIA_TYPE in accepted
-        ):
+        if not requested_format and (HYDRABOX_MEDIA_TYPE in accepted or JWE_MEDIA_TYPE in accepted):
             requested_format = "hydrabox"
         response_format = resolve_subscription_format(
             requested_format,
@@ -195,11 +208,7 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             return
 
         parts = request.path.strip("/").split("/")
-        token = (
-            parts[1]
-            if len(parts) >= 2 and parts[0] == "sub"
-            else parameters.get("token", [None])[0]
-        )
+        token = parts[1] if len(parts) >= 2 and parts[0] == "sub" else parameters.get("token", [None])[0]
         if not token:
             self._send_error(404, "Not found")
             return
@@ -228,11 +237,7 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
             return
 
         user = next(
-            (
-                candidate
-                for candidate in state.users
-                if candidate.uuid == token and is_user_valid(candidate, state)
-            ),
+            (candidate for candidate in state.users if candidate.uuid == token and is_user_valid(candidate, state)),
             None,
         )
         if user is None:
@@ -250,10 +255,7 @@ class SubscriptionHandler(BaseHTTPRequestHandler):
         except Exception:
             self._send_error(500, "Subscription generation failed")
             return
-        safe_email = (
-            re.sub(r"[^A-Za-z0-9._@+-]+", "_", user.email).strip("._")
-            or "user"
-        )
+        safe_email = re.sub(r"[^A-Za-z0-9._@+-]+", "_", user.email).strip("._") or "user"
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         if response_format == "hydrabox":

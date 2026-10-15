@@ -12,6 +12,7 @@
 
 ### Добавлено
 
+- Форматы подписок FlClash/Mihomo (`format=clash`, alias `flclash`) и Happ (`format=happ`): автодетект по User-Agent, ручные ссылки в TUI, выбор только совместимых профилей основы и managed nodes; чужие NekoBox-контейнеры не попадают в Happ, неизвестные XHTTP-расширения не упрощаются для Clash.
 - Managed nodes v2: enrollment по подтверждённому SSH host key, pinned source SHA, ограниченный mTLS `/v1` agent, durable operations и локальные receipt-committed profile bundles.
 - Изменение протокола атомарно записывает definition, frozen `NodeDesired` и pending apply operation одним state CAS до network/host effects; resume продолжает с теми же operation ID и payload.
 - Apply proof привязан к digest runtime-конфигурации отдельно от process billing epoch: config-only change отзывает stale receipt, не начисляя прежние absolute counters повторно.

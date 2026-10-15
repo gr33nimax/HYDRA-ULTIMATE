@@ -1,4 +1,5 @@
 """Subscription URLs, negotiation metadata, and access checks."""
+
 from __future__ import annotations
 
 import urllib.parse
@@ -20,6 +21,8 @@ SUPPORTED_SUBSCRIPTION_FORMATS = {
     "sing-box",
     "json",
     "hydrabox",
+    "clash",
+    "happ",
 }
 
 
@@ -31,9 +34,13 @@ def resolve_subscription_format(
     if requested:
         normalized = requested.lower()
         if normalized not in ("auto", "default"):
-            return normalized
+            return "clash" if normalized == "flclash" else normalized
 
     ua = user_agent.lower()
+    if "happ" in ua:
+        return "happ"
+    if "clash" in ua or "mihomo" in ua:
+        return "clash"
     if "nekobox/android" in ua or "nekobox" in ua:
         return "nekobox"
     if "shadowrocket" in ua:
@@ -87,6 +94,8 @@ def get_subscription_urls(user: User, state: AppState) -> dict[str, str]:
         hydrabox_url = f"{hydrabox_url}#hydra-key={user.hydrabox_jwe_key}"
     return {
         "auto": base,
+        "flclash": with_format("clash"),
+        "happ": with_format("happ"),
         "nekobox": with_format("nekobox"),
         "shadowrocket": with_format("shadowrocket"),
         "throne": with_format("throne"),

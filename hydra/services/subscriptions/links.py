@@ -232,8 +232,11 @@ def _base_subscription_links(
         link
         for profile in node_profiles_for_user(user, state, node_exports=node_exports)
         for link in profile.links
-        if not (profile.protocol == "amneziawg" and link.startswith("vpn://")
-                and any(candidate.startswith("wg://") for candidate in profile.links))
+        if not (
+            profile.protocol == "amneziawg"
+            and link.startswith("vpn://")
+            and any(candidate.startswith("wg://") for candidate in profile.links)
+        )
     ]
     links = [*formatted, *node_links]
     links.extend(converted for link in links if (converted := clean_link_to_sn(link, user)))
@@ -257,6 +260,31 @@ def generate_base64_sub(
     )
     payload = "\n".join(links) + "\n"
     return base64.b64encode(payload.encode()).decode()
+
+
+def generate_happ_sub(
+    user: User,
+    state: AppState,
+    *,
+    plugins: SubscriptionPluginAccess,
+    node_exports: ManagedNodeProfileReader | None = None,
+) -> str:
+    """Export only Happ-supported URI schemes, preserving Xray transport extras."""
+    supported = {"vless", "vmess", "trojan", "ss", "socks", "socks5", "hysteria2", "hy2"}
+    links = []
+    for link in _base_subscription_links(user, state, plugins=plugins, node_exports=node_exports):
+        try:
+            parsed = urllib.parse.urlsplit(link)
+            if parsed.scheme.lower() not in supported:
+                continue
+            if urllib.parse.parse_qs(parsed.query).get("plugin"):
+                continue
+        except ValueError:
+            continue
+        links.append(link)
+    if not links:
+        raise ValueError("No compatible Happ profiles")
+    return base64.b64encode(("\n".join(dict.fromkeys(links)) + "\n").encode()).decode("ascii")
 
 
 def generate_shadowrocket_sub(

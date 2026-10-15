@@ -1,4 +1,5 @@
 """Bounded HTTPS workers with trusted loopback PROXY protocol support."""
+
 from __future__ import annotations
 
 import ipaddress
@@ -7,6 +8,8 @@ import threading
 from http.server import HTTPServer
 from socketserver import ThreadingMixIn
 
+from hydra.services.subscriptions.access import SubscriptionPluginAccess
+from hydra.services.subscriptions.node_exports import ManagedNodeProfileReader
 from hydra.services.subscriptions.proxy_protocol import read_source_address
 
 
@@ -20,6 +23,8 @@ def _is_loopback(address: tuple[object, ...]) -> bool:
 class _ProxyTLSHTTPServer(ThreadingMixIn, HTTPServer):
     """Keep PROXY reads, TLS handshakes and HTTP reads outside the accept loop."""
 
+    subscription_plugins: SubscriptionPluginAccess | None
+    node_exports: ManagedNodeProfileReader | None
     daemon_threads = True
     block_on_close = False
     max_connections = 32

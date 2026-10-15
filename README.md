@@ -108,7 +108,7 @@ Sing-Box, Caddy L4 и nftables — производная от него. При�
 
 Порты, владельцы, службы, пути и файлы состояния —
 [REFERENCE.md](docs/REFERENCE.md). Какие транспорты понимают целевые клиенты
-(Shadowrocket, NekoBox, Throne, HydraBox) — [COMPATIBILITY.md](docs/COMPATIBILITY.md).
+(Shadowrocket, NekoBox, Throne, HydraBox, FlClash, Happ) — [COMPATIBILITY.md](docs/COMPATIBILITY.md).
 Операции протоколов, параметры и примеры — [CLI.md](docs/CLI.md#плагины).
 
 ## Установка

@@ -140,16 +140,24 @@ def _client_artifacts(
     nodes = getattr(app, "nodes", None)
     if nodes is not None:
         for profile in node_profiles_for_user(user, state, node_exports=nodes):
-            artifacts.append(_ClientArtifact(
-                profile.protocol, profile.name, profile.profile, "",
-                json.dumps(profile.singbox[0], ensure_ascii=False, indent=2) if profile.singbox else "",
-                profile.links, profile.name_key,
-            ))
+            artifacts.append(
+                _ClientArtifact(
+                    profile.protocol,
+                    profile.name,
+                    profile.profile,
+                    "",
+                    json.dumps(profile.singbox[0], ensure_ascii=False, indent=2) if profile.singbox else "",
+                    profile.links,
+                    profile.name_key,
+                )
+            )
     return artifacts
 
 
 def _artifact_name_key(artifact: _ClientArtifact) -> str:
-    return artifact.name_key or (f"{artifact.plugin_name}:{artifact.profile_name}" if artifact.profile_name else artifact.plugin_name)
+    return artifact.name_key or (
+        f"{artifact.plugin_name}:{artifact.profile_name}" if artifact.profile_name else artifact.plugin_name
+    )
 
 
 def _artifact_title(
@@ -283,7 +291,7 @@ def _show_subscription_links(
     print()
     print(f"  {BOLD}Основная ссылка (рекомендуется){NC}")
     print(
-        f"  {DIM}NekoBox, Shadowrocket и Throne определяются автоматически по приложению.{NC}",
+        f"  {DIM}NekoBox, Shadowrocket, Throne, FlClash и Happ определяются автоматически по приложению.{NC}",
     )
     print(urls["auto"])
     print()
@@ -292,6 +300,8 @@ def _show_subscription_links(
         ("NekoBox", "nekobox"),
         ("Shadowrocket", "shadowrocket"),
         ("Throne", "throne"),
+        ("FlClash / Mihomo", "flclash"),
+        ("Happ", "happ"),
         ("Sing-Box JSON", "singbox"),
         ("HydraBox JWE", "hydrabox"),
     ):

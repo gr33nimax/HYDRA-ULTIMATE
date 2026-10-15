@@ -96,9 +96,23 @@ state и печатается независимо от службы; сама �
 `hydra-sub.service` и у него есть валидная пара сертификат/ключ. Пару выбирает
 `find_any_cert` при старте сервера подписок и повторно — при показе ссылок в TUI
 (`admin.subscription_certificate`).
-Auto endpoint распознаёт NekoBox, Shadowrocket и Throne по `User-Agent`; для
-ручного выбора доступны `format=nekobox`, `format=shadowrocket`,
-`format=throne` и `format=singbox`. Shadowrocket получает Naive TCP двумя
+Auto endpoint распознаёт NekoBox, Shadowrocket, Throne, FlClash/Mihomo и Happ по
+`User-Agent`; для ручного выбора доступны `format=nekobox`, `format=shadowrocket`,
+`format=throne`, `format=singbox`, `format=clash` (alias `flclash`) и `format=happ`.
+Явный `format` имеет приоритет над приложением. FlClash получает полный Mihomo-конфиг
+с `proxies`, группой выбора `HYDRA` и правилом `MATCH,HYDRA`: JSON-форму YAML 1.2
+с именем файла `clash.yaml`, без внешнего конвертера и передачи ему токена.
+Экспортируются VLESS (TCP/WS/gRPC/XHTTP), Hysteria2 и AnyTLS; standalone Trojan
+поддерживается, но внутренний Trojan от ShadowTLS не экспортируется отдельно.
+Для XHTTP нужна версия ядра Mihomo с поддержкой XHTTP. Неизвестные XHTTP-настройки
+и CDN-диалект с GET-uplink не упрощаются и в Clash-выдачу не включаются.
+Happ получает base64-список только поддерживаемых URI: VLESS, VMess, Trojan,
+Shadowsocks, SOCKS и Hysteria2, без NekoBox `sn://`, AWG и других чужих контейнеров.
+Параметры VLESS, включая `extra`, сохраняются. Совместимость отдельных расширений
+зависит от версии ядра клиента. Обе выдачи включают подтверждённые профили managed nodes;
+если совместимых профилей нет, сервер возвращает ошибку генерации вместо пустой
+подписки или незаметного DIRECT fallback. Ручные ссылки доступны в TUI.
+Shadowrocket получает Naive TCP двумя
 ссылками — `https://` (HTTP/1.1) и `http2://` (HTTP/2), Naive QUIC — `http3://`;
 параметр `alpn` сервер не выставляет.
 TCP-варианты включают `uot=2` и `tfo=1`, а все три варианта — `padding=1`,
