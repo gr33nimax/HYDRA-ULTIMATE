@@ -305,6 +305,8 @@ def _show_subscription_links(
         ("Sing-Box JSON", "singbox"),
         ("HydraBox JWE", "hydrabox"),
     ):
+        if key not in urls:
+            continue
         print(f"  {label}:")
         print(urls[key])
     print(

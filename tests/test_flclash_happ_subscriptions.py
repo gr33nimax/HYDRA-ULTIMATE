@@ -224,3 +224,30 @@ def test_http_download_negotiates_client_payload(agent, query, mime, suffix):
         assert json.loads(handler.wfile.getvalue())["proxies"][0]["type"] == "vless"
     else:
         assert base64.b64decode(handler.wfile.getvalue()).decode().startswith("vless://")
+
+
+def test_subscription_menu_prints_real_flclash_and_happ_urls():
+    from unittest.mock import patch
+
+    from hydra.ui import menus
+
+    user = User(email="alice", uuid="token")
+    state = AppState(users=[user])
+    state.network.sub_domain = "sub.example.org"
+    app = MagicMock()
+    app.admin.unit_active.return_value = True
+    app.admin.subscription_certificate.return_value = ("cert", "key")
+
+    with (
+        patch.object(menus, "clear"),
+        patch.object(menus, "title"),
+        patch.object(menus, "panel"),
+        patch.object(menus, "prompt"),
+        patch("builtins.print") as output,
+    ):
+        menus._show_subscription_links(state, user, app)
+
+    rendered = [call.args[0] for call in output.call_args_list if call.args]
+    assert "https://sub.example.org/sub/token?format=clash" in rendered
+    assert "https://sub.example.org/sub/token?format=happ" in rendered
+    assert all(url in rendered for url in get_subscription_urls(user, state).values())
