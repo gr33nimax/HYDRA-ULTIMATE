@@ -1,4 +1,5 @@
 """Certificate inventory and explicit, transactional operator maintenance."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -91,7 +92,9 @@ class CertificateManager:
             touched: set[str] = set()
             self.journal("certificate_started", operation=operation, certificate=name)
             transaction.add_rollback("TLS lineage", lambda: self.runtime.restore(snapshot), priority=10)
-            transaction.add_rollback("TLS services", lambda: self.runtime.restore_services(active, touched), priority=20)
+            transaction.add_rollback(
+                "TLS services", lambda: self.runtime.restore_services(active, touched), priority=20
+            )
             transaction.advance("mutate")
             if operation == "delete":
                 self.runtime.delete(name)
@@ -99,14 +102,23 @@ class CertificateManager:
                 self.runtime.reissue(certificate, active, touched)
             self.journal("certificate_committed", operation=operation, certificate=name)
             transaction.commit()
-            message = "Сертификат перевыпущен; работающие TLS-службы обновлены" if operation == "reissue" else "Сертификат удалён из Certbot; настройки протоколов не изменены"
+            message = (
+                "Сертификат перевыпущен; работающие TLS-службы обновлены"
+                if operation == "reissue"
+                else "Сертификат удалён из Certbot; настройки протоколов не изменены"
+            )
             return AdminCommandResult(True, operation, message)
         except Exception as exc:
             failures = transaction.rollback()
             message = f"Операция не выполнена: {str(exc)[:300]}"
             try:
-                self.journal("certificate_failed", operation=operation, certificate=name,
-                             error=str(exc)[:300], rollback_failed=[item.action for item in failures])
+                self.journal(
+                    "certificate_failed",
+                    operation=operation,
+                    certificate=name,
+                    error=str(exc)[:300],
+                    rollback_failed=[item.action for item in failures],
+                )
             except Exception:
                 message += "; журнал операции недоступен"
             if failures:

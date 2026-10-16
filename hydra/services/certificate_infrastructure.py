@@ -1,4 +1,5 @@
 """Local Certbot inventory and bounded host operations for certificate maintenance."""
+
 from __future__ import annotations
 
 import configparser
@@ -43,8 +44,18 @@ class CertificateInfrastructure:
             path = Path(status.certificate)
             if any(path.is_relative_to(Path(directory)) for directory in managed_paths):
                 continue
-            entries.append(IssuedCertificate(f"external:{status.owner}", (status.domain,), status.certificate,
-                                             status.status, status.detail, status.days_left, (status.owner,), False))
+            entries.append(
+                IssuedCertificate(
+                    f"external:{status.owner}",
+                    (status.domain,),
+                    status.certificate,
+                    status.status,
+                    status.detail,
+                    status.days_left,
+                    (status.owner,),
+                    False,
+                )
+            )
         return entries
 
     def _record(self, name: str, state: AppState) -> IssuedCertificate:
@@ -53,7 +64,11 @@ class CertificateInfrastructure:
         expires, days_left, status = "", None, "unreadable"
         try:
             certificate = x509.load_pem_x509_certificate(self.files.read(name, "fullchain.pem"))
-            domains = tuple(certificate.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName))
+            domains = tuple(
+                certificate.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(
+                    x509.DNSName
+                )
+            )
             expiry = certificate.not_valid_after_utc
             days_left = (expiry - datetime.now(timezone.utc)).days
             expires = expiry.isoformat()
@@ -63,8 +78,16 @@ class CertificateInfrastructure:
             status = "missing"
         except (ValueError, OSError, x509.ExtensionNotFound):
             status = "unreadable"
-        return IssuedCertificate(name, domains, str(live / "fullchain.pem"), status, expires, days_left,
-                                 self._used_by(name, state), renewal.is_file() and not renewal.is_symlink())
+        return IssuedCertificate(
+            name,
+            domains,
+            str(live / "fullchain.pem"),
+            status,
+            expires,
+            days_left,
+            self._used_by(name, state),
+            renewal.is_file() and not renewal.is_symlink(),
+        )
 
     def _used_by(self, name: str, state: AppState) -> tuple[str, ...]:
         scopes = self.files.scopes(name)[:2]
@@ -82,17 +105,29 @@ class CertificateInfrastructure:
         for owner, protocol in state.protocols.items():
             config = protocol.config or {}
             cert, key = (str(config.get(field, "")).strip() for field in ("cert_file", "key_file"))
-            paths = [Path(cert), Path(key)] if cert and key else [
-                default(str(config[field])) for field in ("domain", "origin_domain", "web_domain") if config.get(field)
-            ]
+            paths = (
+                [Path(cert), Path(key)]
+                if cert and key
+                else [
+                    default(str(config[field]))
+                    for field in ("domain", "origin_domain", "web_domain")
+                    if config.get(field)
+                ]
+            )
             if any(belongs(path) for path in paths):
                 uses.add(owner if protocol.enabled else f"{owner} (отключён)")
         if state.network.sub_domain:
             subscription = default(state.network.sub_domain)
         else:
             domains = [state.network.domain, *(str(p.config.get("domain", "")) for p in state.protocols.values())]
-            subscription = next((default(domain) for domain in domains if domain and default(domain).is_file()
-                                 and default(domain).with_name("privkey.pem").is_file()), None)
+            subscription = next(
+                (
+                    default(domain)
+                    for domain in domains
+                    if domain and default(domain).is_file() and default(domain).with_name("privkey.pem").is_file()
+                ),
+                None,
+            )
         if subscription is not None and belongs(subscription):
             uses.add("subscriptions")
         return tuple(sorted(uses))
@@ -110,7 +145,9 @@ class CertificateInfrastructure:
             text = self.host.read_bytes(renewal, max_bytes=128 * 1024).decode("utf-8")
             config = configparser.RawConfigParser()
             config.read_string("[lineage]\n" + text)
-            values = [Path(config.get("lineage", key)) for key in ("archive_dir", "cert", "privkey", "chain", "fullchain")]
+            values = [
+                Path(config.get("lineage", key)) for key in ("archive_dir", "cert", "privkey", "chain", "fullchain")
+            ]
         except (configparser.Error, UnicodeError) as exc:
             raise ValueError("Некорректный renewal config сертификата") from exc
         for value in values:
@@ -172,7 +209,9 @@ class CertificateInfrastructure:
             raise RuntimeError("Новый сертификат недействителен")
         if certificate.public_key().public_bytes(encoding, form) != key.public_key().public_bytes(encoding, form):
             raise RuntimeError("Новый сертификат не соответствует закрытому ключу")
-        domains = certificate.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(x509.DNSName)
+        domains = certificate.extensions.get_extension_for_class(x509.SubjectAlternativeName).value.get_values_for_type(
+            x509.DNSName
+        )
         if not set(original.domains).issubset(domains):
             raise RuntimeError("Новый сертификат не покрывает прежние домены")
 
@@ -207,9 +246,25 @@ class CertificateInfrastructure:
         self.files.scopes(name)
         if not self.host.which("certbot"):
             raise RuntimeError("Certbot не установлен")
-        result = self.host.run(["certbot", action, "--cert-name", name, "--config-dir", str(self.files.root),
-                                "--config", "/dev/null", "--no-directory-hooks", "--non-interactive", *options],
-                               text=True, timeout=240)
+        result = self.host.run(
+            [
+                "certbot",
+                action,
+                "--cert-name",
+                name,
+                "--config-dir",
+                str(self.files.root),
+                "--config",
+                "/dev/null",
+                "--no-directory-hooks",
+                "--non-interactive",
+                *options,
+            ],
+            text=True,
+            timeout=240,
+        )
         if result.returncode:
             # Certbot logs can contain hook/plugin secrets; don't return raw output to adapters.
-            raise RuntimeError(f"Certbot {action} завершился с кодом {result.returncode}; подробности в журнале Certbot")
+            raise RuntimeError(
+                f"Certbot {action} завершился с кодом {result.returncode}; подробности в журнале Certbot"
+            )

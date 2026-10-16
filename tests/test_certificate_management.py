@@ -1,4 +1,5 @@
 """Local certificate maintenance with isolated files and an injected fake host."""
+
 from __future__ import annotations
 
 import copy
@@ -32,12 +33,21 @@ def _pair(domain=NAME, days=90):
     key = ec.generate_private_key(ec.SECP256R1())
     now = datetime.now(timezone.utc)
     subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, domain)])
-    cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject).public_key(key.public_key())
-            .serial_number(x509.random_serial_number()).not_valid_before(now - timedelta(days=100))
-            .not_valid_after(now + timedelta(days=days)).add_extension(x509.SubjectAlternativeName([x509.DNSName(domain)]), False)
-            .sign(key, hashes.SHA256()))
-    return (cert.public_bytes(serialization.Encoding.PEM),
-            key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(days=100))
+        .not_valid_after(now + timedelta(days=days))
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName(domain)]), False)
+        .sign(key, hashes.SHA256())
+    )
+    return (
+        cert.public_bytes(serialization.Encoding.PEM),
+        key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()),
+    )
 
 
 def _lineage(root, name=NAME, days=90):
@@ -51,9 +61,12 @@ def _lineage(root, name=NAME, days=90):
     (live / "privkey.pem").chmod(0o600)
     renewal = root / "renewal" / f"{name}.conf"
     renewal.parent.mkdir(exist_ok=True)
-    renewal.write_text(f"archive_dir = {archive}\ncert = {live / 'cert.pem'}\nprivkey = {live / 'privkey.pem'}\n"
-                       f"chain = {live / 'chain.pem'}\nfullchain = {live / 'fullchain.pem'}\n"
-                       "[renewalparams]\nauthenticator = standalone\n", encoding="utf8")
+    renewal.write_text(
+        f"archive_dir = {archive}\ncert = {live / 'cert.pem'}\nprivkey = {live / 'privkey.pem'}\n"
+        f"chain = {live / 'chain.pem'}\nfullchain = {live / 'fullchain.pem'}\n"
+        "[renewalparams]\nauthenticator = standalone\n",
+        encoding="utf8",
+    )
     return cert, key
 
 
@@ -74,7 +87,9 @@ class _Host(HostBackend):
         if args[0] == "systemctl":
             action, unit = args[1:3]
             if action == "is-active":
-                return CompletedProcess(args, 0 if unit in self.active else 3, "active" if unit in self.active else "inactive", "")
+                return CompletedProcess(
+                    args, 0 if unit in self.active else 3, "active" if unit in self.active else "inactive", ""
+                )
             if action == "stop":
                 self.active.discard(unit)
             else:
@@ -128,16 +143,22 @@ def setup(tmp_path):
     runtime = CertificateInfrastructure(host, files, inspector, open_http=nullcontext)
     state = AppState(protocols={"anytls": PluginState(enabled=True, config={"domain": NAME})})
     events = []
-    manager = CertificateManager(inspector, runtime, lambda: copy.deepcopy(state),
-                                 CreatorFileLock(host, tmp_path / "apply.lock"),
-                                 lambda event, **fields: events.append((event, fields)))
+    manager = CertificateManager(
+        inspector,
+        runtime,
+        lambda: copy.deepcopy(state),
+        CreatorFileLock(host, tmp_path / "apply.lock"),
+        lambda event, **fields: events.append((event, fields)),
+    )
     return manager, host, state, events, old
 
 
 def test_inventory_includes_unused_expired_and_external_without_mutation(setup):
     manager, host, state, _, _ = setup
     _lineage(host.root, "unused.example.org", days=-1)
-    manager.inspector.inspect.return_value = [CertificateStatus("custom", "custom.example", "/custom/cert.pem", "ok", 60)]
+    manager.inspector.inspect.return_value = [
+        CertificateStatus("custom", "custom.example", "/custom/cert.pem", "ok", 60)
+    ]
     before = copy.deepcopy(state)
     records = manager.inventory()
     assert [item.name for item in records] == ["unused.example.org", NAME, "external:custom"]
@@ -208,7 +229,9 @@ def test_explicit_confirmation_allows_delete_even_if_currently_used(setup):
     assert events[-1][0] == "certificate_committed"
 
 
-@pytest.mark.parametrize("setting", ["pre_hook", "post_hook", "renew_hook", "deploy_hook", "manual_auth_hook", "manual_cleanup_hook"])
+@pytest.mark.parametrize(
+    "setting", ["pre_hook", "post_hook", "renew_hook", "deploy_hook", "manual_auth_hook", "manual_cleanup_hook"]
+)
 def test_reissue_never_executes_persisted_shell_hooks(setup, setting):
     manager, host, _, _, _ = setup
     path = host.root / "renewal" / f"{NAME}.conf"
@@ -367,13 +390,19 @@ def test_certbot_live_symlinks_are_snapshotted_and_recreated_through_host(setup,
 
     manager, host, _, _, old = setup
     live, archive, _ = manager.runtime.files.scopes(NAME)
-    targets = {live / "fullchain.pem": f"../../archive/{NAME}/fullchain1.pem",
-               live / "privkey.pem": f"../../archive/{NAME}/privkey1.pem"}
+    targets = {
+        live / "fullchain.pem": f"../../archive/{NAME}/fullchain1.pem",
+        live / "privkey.pem": f"../../archive/{NAME}/privkey1.pem",
+    }
     (archive / "fullchain1.pem").write_bytes(old[0])
     (archive / "privkey1.pem").write_bytes(old[1])
     is_symlink, readlink = Path.is_symlink, os.readlink
     monkeypatch.setattr(Path, "is_symlink", lambda path: path in targets or is_symlink(path))
-    monkeypatch.setattr(os, "readlink", lambda path, **kwargs: targets[Path(path)] if Path(path) in targets else readlink(path, **kwargs))
+    monkeypatch.setattr(
+        os,
+        "readlink",
+        lambda path, **kwargs: targets[Path(path)] if Path(path) in targets else readlink(path, **kwargs),
+    )
     snapshot = manager.runtime.files.snapshot(NAME)
     assert set(snapshot.links) == {(path.relative_to(host.root).as_posix(), target) for path, target in targets.items()}
     assert not any(item.path == f"live/{NAME}/privkey.pem" for item in snapshot.files)

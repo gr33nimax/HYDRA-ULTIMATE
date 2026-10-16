@@ -1,4 +1,5 @@
 """Temporary ACME access must close even when opening failed after a partial effect."""
+
 from unittest.mock import MagicMock
 
 import pytest

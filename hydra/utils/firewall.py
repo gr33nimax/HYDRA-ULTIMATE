@@ -4,6 +4,7 @@ hydra/utils/firewall.py — Менеджер firewall: авто-выбор UFW/i
 Логика портирована из legacy-модулей NaiveProxy и Mieru
 (_ipt_*/_ufw_* хелперы — идентичны в обоих модулях).
 """
+
 from __future__ import annotations
 
 import shutil
@@ -19,6 +20,7 @@ from hydra.core.host import HOST
 #  Внутренние хелперы
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def _run(cmd: list[str], capture: bool = True) -> subprocess.CompletedProcess:
     """Выполнить команду, вернуть CompletedProcess."""
     return HOST.run(cmd, timeout=DEFAULT_TIMEOUT, text=True)
@@ -33,6 +35,7 @@ def _ipt_rule_exists(table: str, chain: str, spec: list[str]) -> bool:
 # ══════════════════════════════════════════════════════════════════════════════
 #  UFW
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 def is_ufw_active() -> bool:
     """True если ufw есть и status: active.
@@ -79,6 +82,7 @@ def _ufw_close(proto: str, port_start: int, port_end: int, comment: str | None =
 #  iptables
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def _ipt_open(proto: str, port_start: int, port_end: int, comment: str) -> None:
     """Открывает порты через iptables INPUT."""
     proto = proto.lower()
@@ -118,6 +122,7 @@ def _ipt_close(proto: str, port_start: int, port_end: int, comment: str | None =
 #  Persist
 # ══════════════════════════════════════════════════════════════════════════════
 
+
 def persist() -> None:
     """Сохраняет текущие правила: netfilter-persistent save либо /etc/iptables/rules.v4."""
     HOST.persist_firewall()
@@ -126,6 +131,7 @@ def persist() -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 #  Публичный API
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 def open_tcp(port: int, comment: str = "hydra") -> str:
     """Открывает TCP порт через UFW (если активен) иначе iptables. Возвращает описание."""

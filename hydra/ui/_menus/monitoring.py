@@ -1,4 +1,5 @@
 """Compatibility facade for modular monitoring menu controllers."""
+
 from __future__ import annotations
 
 from functools import wraps
@@ -85,19 +86,35 @@ _IMPLEMENTATIONS: dict[str, ModuleType] = {
 }
 
 _PATCHABLE_NAMES = (
-    "BOLD", "CYAN", "DIM", "GREEN", "NC", "PANEL_W", "RED", "YELLOW",
+    "BOLD",
+    "CYAN",
+    "DIM",
+    "GREEN",
+    "NC",
+    "PANEL_W",
+    "RED",
+    "YELLOW",
     *_IMPLEMENTATIONS,
-    "_bytes_auto", "_select_user", "_show_user_detail", "clear", "confirm", "error",
-    "info", "kv", "log_viewer", "menu", "panel", "prompt", "success",
-    "system_monitor", "title", "warn",
+    "_bytes_auto",
+    "_select_user",
+    "_show_user_detail",
+    "clear",
+    "confirm",
+    "error",
+    "info",
+    "kv",
+    "log_viewer",
+    "menu",
+    "panel",
+    "prompt",
+    "success",
+    "system_monitor",
+    "title",
+    "warn",
 )
 
 _CONTROLLER_DEFAULTS: dict[ModuleType, dict[str, object]] = {
-    controller: {
-        name: getattr(controller, name)
-        for name in _PATCHABLE_NAMES
-        if hasattr(controller, name)
-    }
+    controller: {name: getattr(controller, name) for name in _PATCHABLE_NAMES if hasattr(controller, name)}
     for controller in _CONTROLLERS
 }
 _FACADE_DEFAULTS: dict[str, object] = {}
@@ -131,8 +148,4 @@ def _make_forwarder(
 for _name, _controller in _IMPLEMENTATIONS.items():
     globals()[_name] = _make_forwarder(_controller, _name)
 
-_FACADE_DEFAULTS.update({
-    name: globals()[name]
-    for name in _PATCHABLE_NAMES
-    if name in globals()
-})
+_FACADE_DEFAULTS.update({name: globals()[name] for name in _PATCHABLE_NAMES if name in globals()})

@@ -1,4 +1,5 @@
 """Bounded, scoped snapshots of one Certbot lineage (including its live symlinks)."""
+
 from __future__ import annotations
 
 import hashlib
@@ -87,8 +88,7 @@ class CertificateFiles:
                 elif stat.S_ISREG(metadata.st_mode):
                     data = self.host.read_bytes(path, max_bytes=min(MAX_BYTES - total, 128 * 1024))
                     total += len(data)
-                    files.append(CertificateFile(relative, mode, data,
-                                                 hashlib.sha256(data).hexdigest()))
+                    files.append(CertificateFile(relative, mode, data, hashlib.sha256(data).hexdigest()))
                 else:
                     raise ValueError("Нестандартный тип файла в lineage")
         return CertificateSnapshot(name, tuple(files), tuple(directories), tuple(links), tuple(owners))
@@ -97,11 +97,18 @@ class CertificateFiles:
         scopes = self.scopes(snapshot.name)
         seen: set[str] = set()
         total = 0
-        for relative in [*(item.path for item in snapshot.files), *(p for p, _ in snapshot.directories),
-                         *(p for p, _ in snapshot.links)]:
+        for relative in [
+            *(item.path for item in snapshot.files),
+            *(p for p, _ in snapshot.directories),
+            *(p for p, _ in snapshot.links),
+        ]:
             path = self.root / relative
-            if (Path(relative).is_absolute() or relative in seen or ".." in Path(relative).parts
-                    or not any(path == s or path.is_relative_to(s) for s in scopes)):
+            if (
+                Path(relative).is_absolute()
+                or relative in seen
+                or ".." in Path(relative).parts
+                or not any(path == s or path.is_relative_to(s) for s in scopes)
+            ):
                 raise ValueError("Некорректный manifest сертификата")
             seen.add(relative)
         if len(seen) > MAX_FILES:
@@ -117,9 +124,15 @@ class CertificateFiles:
                 raise ValueError("Недопустимые права snapshot")
         for relative, target in snapshot.links:
             self._check_link(snapshot.name, relative, target)
-        if ({path for path, _, _ in snapshot.owners} != seen or len(snapshot.owners) != len(seen)
-                or any(type(value) is not int or not 0 <= value < 2**32 - 1
-                       for _, uid, gid in snapshot.owners for value in (uid, gid))):
+        if (
+            {path for path, _, _ in snapshot.owners} != seen
+            or len(snapshot.owners) != len(seen)
+            or any(
+                type(value) is not int or not 0 <= value < 2**32 - 1
+                for _, uid, gid in snapshot.owners
+                for value in (uid, gid)
+            )
+        ):
             raise ValueError("Некорректные владельцы в manifest")
         if any(mode & ~0o777 for _, mode in snapshot.directories):
             raise ValueError("Недопустимые права каталога в manifest")

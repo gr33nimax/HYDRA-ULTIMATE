@@ -1,4 +1,5 @@
 """Certificate TUI delegates to the application port and confirms destructive actions."""
+
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -20,8 +21,16 @@ def screen(monkeypatch):
 
 
 def _certificate(*, managed=True):
-    return IssuedCertificate("vpn.example.org", ("vpn.example.org",), "/etc/letsencrypt/live/vpn.example.org/fullchain.pem",
-                             "ok", "2026-12-01T00:00:00+00:00", 60, ("anytls", "subscriptions"), managed)
+    return IssuedCertificate(
+        "vpn.example.org",
+        ("vpn.example.org",),
+        "/etc/letsencrypt/live/vpn.example.org/fullchain.pem",
+        "ok",
+        "2026-12-01T00:00:00+00:00",
+        60,
+        ("anytls", "subscriptions"),
+        managed,
+    )
 
 
 def test_certificate_submenu_is_next_to_sync_agent():
@@ -30,7 +39,8 @@ def test_certificate_submenu_is_next_to_sync_agent():
     app.admin.load_state.return_value = state
     app.admin.unit_active.return_value = False
     with (
-        patch.object(menus, "clear"), patch.object(menus, "panel"),
+        patch.object(menus, "clear"),
+        patch.object(menus, "panel"),
         patch.object(menus, "menu", side_effect=["4", "0"]) as choose,
         patch.object(monitoring, "_menu_certificates") as submenu,
     ):

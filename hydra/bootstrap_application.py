@@ -74,7 +74,9 @@ def production_admin_surfaces(protocols, traffic, orchestration, plugin_actions,
     certificate_manager = CertificateManager(
         inspector=certificate_audit,
         runtime=CertificateInfrastructure(
-            HOST, CertificateFiles(HOST), certificate_audit,
+            HOST,
+            CertificateFiles(HOST),
+            certificate_audit,
             open_http=lambda: temporary_open_port("tcp", 80, "temp-certbot"),
         ),
         read_state=load_state,

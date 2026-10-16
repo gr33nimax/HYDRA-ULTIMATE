@@ -1,4 +1,5 @@
 """Monitoring overview and background-service navigation."""
+
 from __future__ import annotations
 
 from hydra.core.state_models import AppState
@@ -61,10 +62,7 @@ def menu_monitoring(
             PluginCategory.TRANSPORT,
         )
         statuses = app.protocols.statuses(state)
-        running_count = sum(
-            int(bool(statuses.get(name, {}).get("running")))
-            for name in enabled_names
-        )
+        running_count = sum(int(bool(statuses.get(name, {}).get("running"))) for name in enabled_names)
         users_count = len(state.users)
         active_users = sum(not user.blocked for user in state.users)
         sync_active = _unit_active("hydra-sync-agent.timer", app)
@@ -117,21 +115,32 @@ def _menu_service_settings(
         sync_active = _unit_active("hydra-sync-agent.timer", app)
         clash_enabled = bool(getattr(state.network, "clash_api_enabled", False))
         traffic_active = _unit_active("hydra-traffic-daemon.service", app)
-        panel("Фоновые службы", [
-            kv("Sync Agent:", f"{GREEN}активно 🟢{NC}" if sync_active else f"{DIM}неактивно ⚪{NC}"),
-            kv("Clash API:", (
-                f"{GREEN}активно 🟢{NC}" if clash_enabled and traffic_active
-                else f"{YELLOW}ошибка службы 🟡{NC}" if clash_enabled
-                else f"{DIM}неактивно ⚪{NC}"
-            )),
-        ])
-        choice = menu([
-            ("1", "📋 Просмотр системных логов", "Sing-Box, Sync-Agent, Fail2ban и др."),
-            ("2", "🔄 Sync Agent", "Проверка лимитов, сроков действия и обновление WARP-списков"),
-            ("3", "📊 Clash API", "Локальный API Sing-Box и демон статистики трафика"),
-            ("4", "🔐 TLS-сертификаты", "Сроки действия, принудительный перевыпуск и удаление"),
-            ("0", "↩ Назад", ""),
-        ], "СЕРВИСНЫЕ НАСТРОЙКИ")
+        panel(
+            "Фоновые службы",
+            [
+                kv("Sync Agent:", f"{GREEN}активно 🟢{NC}" if sync_active else f"{DIM}неактивно ⚪{NC}"),
+                kv(
+                    "Clash API:",
+                    (
+                        f"{GREEN}активно 🟢{NC}"
+                        if clash_enabled and traffic_active
+                        else f"{YELLOW}ошибка службы 🟡{NC}"
+                        if clash_enabled
+                        else f"{DIM}неактивно ⚪{NC}"
+                    ),
+                ),
+            ],
+        )
+        choice = menu(
+            [
+                ("1", "📋 Просмотр системных логов", "Sing-Box, Sync-Agent, Fail2ban и др."),
+                ("2", "🔄 Sync Agent", "Проверка лимитов, сроков действия и обновление WARP-списков"),
+                ("3", "📊 Clash API", "Локальный API Sing-Box и демон статистики трафика"),
+                ("4", "🔐 TLS-сертификаты", "Сроки действия, принудительный перевыпуск и удаление"),
+                ("0", "↩ Назад", ""),
+            ],
+            "СЕРВИСНЫЕ НАСТРОЙКИ",
+        )
 
         if choice == "0":
             break
