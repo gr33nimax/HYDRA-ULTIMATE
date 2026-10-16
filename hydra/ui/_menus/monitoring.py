@@ -7,6 +7,7 @@ from typing import Callable
 
 from hydra.ui import log_viewer, system_monitor
 from hydra.ui._menus import (
+    monitoring_certificates,
     monitoring_connections,
     monitoring_devices,
     monitoring_logs,
@@ -28,6 +29,7 @@ from hydra.ui.tui import (
     YELLOW,
     _bytes_auto,
     clear,
+    confirm,
     error,
     info,
     kv,
@@ -49,6 +51,7 @@ _CONTROLLERS: tuple[ModuleType, ...] = (
     monitoring_realtime,
     monitoring_logs,
     monitoring_services,
+    monitoring_certificates,
 )
 
 _IMPLEMENTATIONS: dict[str, ModuleType] = {
@@ -77,17 +80,19 @@ _IMPLEMENTATIONS: dict[str, ModuleType] = {
     "_sync_agent_log_snapshot": monitoring_logs,
     "_menu_sync_agent": monitoring_services,
     "_menu_clash_api": monitoring_services,
+    "_menu_certificates": monitoring_certificates,
+    "_certificate_detail": monitoring_certificates,
 }
 
 _PATCHABLE_NAMES = (
     "BOLD", "CYAN", "DIM", "GREEN", "NC", "PANEL_W", "RED", "YELLOW",
     *_IMPLEMENTATIONS,
-    "_bytes_auto", "_select_user", "_show_user_detail", "clear", "error",
+    "_bytes_auto", "_select_user", "_show_user_detail", "clear", "confirm", "error",
     "info", "kv", "log_viewer", "menu", "panel", "prompt", "success",
     "system_monitor", "title", "warn",
 )
 
-_CONTROLLER_DEFAULTS = {
+_CONTROLLER_DEFAULTS: dict[ModuleType, dict[str, object]] = {
     controller: {
         name: getattr(controller, name)
         for name in _PATCHABLE_NAMES

@@ -540,6 +540,17 @@ journalctl -u sing-box -u caddy-l4 --no-pager -n 100
 проверки: certbot на каждой попытке останавливает TLS-фронт, а Let's Encrypt
 ограничивает число неуспешных валидаций.
 
+Ручное обслуживание доступно через `ApplicationService.certificates`:
+read-only `inventory()` показывает все локальные lineage Certbot, а `reissue()`
+и `delete(confirmation=...)` выполняют явную операторскую транзакцию.
+`CertificateManager` использует тот же process apply lock, снимок scoped файлов,
+права/SHA-256 и безопасные symlink, rollback файлов перед восстановлением
+TLS-служб и события `certificate_*` общего apply journal. UI не вызывает
+Certbot, systemd или файловые операции напрямую. Desired state не меняется.
+Удаление назначенного сертификата разрешено только с точным подтверждением
+имени, не перезапускает службы и не отключает протоколы; CA revocation не
+выполняется. Внешние настроенные сертификаты доступны только для просмотра.
+
 ### Creator: Calls и qWDTT
 
 Calls и qWDTT — два потребителя одного creator'а. Каждый владеет своим desired

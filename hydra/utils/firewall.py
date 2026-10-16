@@ -199,12 +199,12 @@ def port_is_open(proto: str, port: int) -> bool:
 def temporary_open_port(proto: str, port: int, comment: str = "hydra-temporary"):
     """Open a firewall port only when needed and restore its prior state."""
     already_open = port_is_open(proto, port)
-    if not already_open:
-        if proto.lower() == "tcp":
-            open_tcp(port, comment)
-        else:
-            open_udp(port, comment)
     try:
+        if not already_open:
+            if proto.lower() == "tcp":
+                open_tcp(port, comment)
+            else:
+                open_udp(port, comment)
         yield
     finally:
         if not already_open:

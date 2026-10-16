@@ -12,6 +12,7 @@
 
 ### Добавлено
 
+- Подменю «TLS-сертификаты» рядом с Sync Agent: полный локальный инвентарь Certbot (включая неиспользуемые сертификаты), сроки и назначения, принудительный перевыпуск и удаление по точному подтверждению имени. Операции используют apply lock, snapshot/rollback lineage и TLS-служб, события apply journal; назначенный сертификат можно удалить с явным предупреждением, без отключения протоколов и без отзыва у CA. Внешние настроенные TLS-файлы доступны только для просмотра.
 - Форматы подписок FlClash/Mihomo (`format=clash`, alias `flclash`) и Happ (`format=happ`): автодетект по User-Agent, ручные ссылки в TUI, выбор только совместимых профилей основы и managed nodes; чужие NekoBox-контейнеры не попадают в Happ, неизвестные XHTTP-расширения не упрощаются для Clash.
 - Managed nodes v2: enrollment по подтверждённому SSH host key, pinned source SHA, ограниченный mTLS `/v1` agent, durable operations и локальные receipt-committed profile bundles.
 - Изменение протокола атомарно записывает definition, frozen `NodeDesired` и pending apply operation одним state CAS до network/host effects; resume продолжает с теми же operation ID и payload.

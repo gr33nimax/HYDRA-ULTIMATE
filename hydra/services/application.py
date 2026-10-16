@@ -41,9 +41,9 @@ from hydra.services.configuration_plan import (
     ConfigurationPlanning,
     UnavailableConfigurationPlanning,
 )
-from hydra.services.certificate_audit import (
-    CertificateInspection,
-    UnavailableCertificateInspection,
+from hydra.services.certificate_management import (
+    CertificateManagement,
+    UnavailableCertificateManagement,
 )
 from hydra.services.logs import LogOperations, UnavailableLogOperations
 from hydra.services.diagnostics import (
@@ -133,8 +133,8 @@ class ApplicationService:
     uninstaller: UninstallOperations = field(
         default_factory=UnavailableUninstallOperations,
     )
-    certificates: CertificateInspection = field(
-        default_factory=UnavailableCertificateInspection,
+    certificates: CertificateManagement = field(
+        default_factory=UnavailableCertificateManagement,
     )
     calls: CallOperations = field(
         default_factory=lambda: cast(CallOperations, UnavailableCallOperations()),

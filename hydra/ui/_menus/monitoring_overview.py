@@ -8,6 +8,7 @@ from hydra.services.system_monitoring_compatibility import (
     monitoring_from_application,
 )
 from hydra.ui._menus.monitoring_connections import _show_connections
+from hydra.ui._menus.monitoring_certificates import _menu_certificates
 from hydra.ui._menus.monitoring_devices import (
     _show_devices,
     summarize as _device_summary,
@@ -128,6 +129,7 @@ def _menu_service_settings(
             ("1", "📋 Просмотр системных логов", "Sing-Box, Sync-Agent, Fail2ban и др."),
             ("2", "🔄 Sync Agent", "Проверка лимитов, сроков действия и обновление WARP-списков"),
             ("3", "📊 Clash API", "Локальный API Sing-Box и демон статистики трафика"),
+            ("4", "🔐 TLS-сертификаты", "Сроки действия, принудительный перевыпуск и удаление"),
             ("0", "↩ Назад", ""),
         ], "СЕРВИСНЫЕ НАСТРОЙКИ")
 
@@ -139,3 +141,5 @@ def _menu_service_settings(
             _menu_sync_agent(state, app)
         elif choice == "3":
             _menu_clash_api(state, app)
+        elif choice == "4":
+            _menu_certificates(state, app)
