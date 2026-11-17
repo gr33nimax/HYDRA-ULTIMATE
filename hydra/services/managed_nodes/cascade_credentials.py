@@ -93,6 +93,7 @@ class CascadeCredentialScope:
         return ProtectedRuntimeUser(
             email=f"cascade-{name}@invalid.hydra",
             uuid=str(uuid.UUID(bytes=bytes(subject_id))),
+            shared_credentials=True,
         )
 
     def technical_subject(
@@ -116,6 +117,7 @@ class CascadeCredentialScope:
         return ProtectedRuntimeUser(
             email=f"cascade-{name}@invalid.hydra",
             uuid=str(uuid.UUID(bytes=bytes(subject_id))),
+            shared_credentials=True,
         )
 
     def _derive(self, purpose: bytes, parts: tuple[str, ...]) -> bytes:

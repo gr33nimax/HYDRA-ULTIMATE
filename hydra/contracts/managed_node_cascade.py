@@ -145,7 +145,7 @@ class CascadeParticipantReceipt:
             not isinstance(self.material_digest, str) or not _SHA256.fullmatch(self.material_digest)
         ):
             raise ValueError("cascade participant material digest is invalid")
-        if request.role == "transit" and self.state == "prepared" and self.material_digest is None:
+        if request.kind == "cascade_save" and request.role == "transit" and self.state == "prepared" and self.material_digest is None:
             raise ValueError("prepared transit receipt has no protected material digest")
 
     def to_document(self) -> dict[str, Any]:

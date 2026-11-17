@@ -109,7 +109,8 @@ class PluginContainer:
             if not subjects:
                 return state
             scoped_state = copy.deepcopy(state)
-            scoped_state.users.extend(ProtectedRuntimeUser(email=user.email, uuid=user.uuid) for user in subjects)
+            scoped_state.users.extend(ProtectedRuntimeUser(email=user.email, uuid=user.uuid,
+                                                           shared_credentials=user.shared_credentials) for user in subjects)
             return scoped_state
 
         plugin_fragments = self.executor.collect_fragments(

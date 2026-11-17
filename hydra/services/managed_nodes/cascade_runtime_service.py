@@ -26,17 +26,27 @@ class ManagedNodeCascadeRuntime:
         credentials: CascadeCredentialStore,
         client_factory: Callable[[str], ManagedNodeClient],
         deadline_seconds: float = 20.0,
+        path_publisher=None,
+        publication_store=None,
+        path_publisher_factory=None,
     ) -> None:
         self._records = records
         self._local = local
         self._credentials = credentials
         self._client_factory = client_factory
         self._deadline_seconds = deadline_seconds
+        self._path_publisher, self._publication_store = path_publisher, publication_store
+        if path_publisher_factory is not None:
+            self._path_publisher = path_publisher_factory(self.read_participant, self._request)
 
     def capabilities(self, participant_id: str) -> dict[str, dict[str, bool]]:
-        # No authenticated installed-engine capability evidence is wired yet.
-        del participant_id
-        return {}
+        if participant_id == self._local.participant_id:
+            evidence = self._local.capabilities()
+        else:
+            evidence = self._client(participant_id).cascade_capabilities(self._deadline())
+        if evidence.get("participant_id") != participant_id:
+            raise ValueError("cascade capability participant identity differs")
+        return evidence["protocols"]
 
     def ensure_snapshot(
         self,
@@ -123,12 +133,26 @@ class ManagedNodeCascadeRuntime:
                 raise RuntimeError("cascade participant apply receipt is not confirmed")
 
     def verify_path(self, operation_id: str, definition: CascadeDefinition) -> bool:
-        del operation_id, definition
-        return False
+        if self._path_publisher is None:
+            return False
+        for participant in (definition.entry_id, definition.exit_id):
+            capabilities = self.capabilities(participant)
+            if any(not all(capabilities.get(protocol, {}).get(key) is True for key in ("client", "server", "probe"))
+                   for protocol in definition.protocols):
+                raise RuntimeError("installed cascade engine capabilities are no longer confirmed")
+        return self._path_publisher.verify(self._operation(operation_id), definition, time.monotonic() + 60.0)
 
     def commit_profiles(self, operation_id: str, definition: CascadeDefinition | None) -> None:
-        del operation_id, definition
-        raise RuntimeError("cascade final profile publication and billing are not wired")
+        if self._publication_store is None:
+            raise RuntimeError("cascade final profile publication and billing are not wired")
+        self._publication_store.commit(self._operation(operation_id), definition)
+
+    def read_participant(self, action, request, deadline):
+        if action not in {"probe_state", "publication"}:
+            raise ValueError("unsupported cascade participant read")
+        if request.participant_id == self._local.participant_id:
+            return getattr(self._local, action)(request)
+        return getattr(self._client(request.participant_id), "cascade_" + action)(request, deadline)
 
     def rollback_participant(self, operation_id: str, participant_id: str) -> bool:
         operation = self._operation(operation_id)

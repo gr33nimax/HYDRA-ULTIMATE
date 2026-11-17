@@ -199,6 +199,16 @@ def refresh_user_traffic(
     protocols: TrafficProtocolAccess,
 ) -> dict[str, int]:
     """Refresh resettable sources and rebuild authoritative user totals."""
+    scoped = getattr(protocols, "cascade_counter_snapshot", None)
+    if callable(scoped):
+        from hydra.services.managed_nodes.cascade_accounting import scoped_samples
+        from hydra.services.managed_nodes.accounting import apply_traffic_samples
+        try:
+            bindings, raw, epoch = scoped(state)
+            apply_traffic_samples(state, "base-cascades", scoped_samples(state, bindings, raw, epoch))
+        except Exception:
+            # Preserve confirmed consumption while the local engine restarts.
+            pass
     enabled_names = protocols.enabled_names(state)
     ensure_report_totals(state)
     cursor_root = state.install.setdefault("traffic_log_cursors", {})

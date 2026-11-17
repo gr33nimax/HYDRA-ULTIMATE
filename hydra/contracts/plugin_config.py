@@ -57,8 +57,11 @@ class RuntimeSubject:
     email: str = field(repr=False)
     uuid: str = field(repr=False)
     protocols: tuple[str, ...] = field(repr=False)
+    shared_credentials: bool = field(default=False, repr=False)
 
     def validate(self) -> None:
+        if type(self.shared_credentials) is not bool:
+            raise FragmentValidationError("runtime shared credential flag is invalid")
         if (
             not isinstance(self.email, str)
             or not self.email.strip()

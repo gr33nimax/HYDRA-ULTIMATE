@@ -12,6 +12,9 @@ import shutil
 import time
 import urllib.error
 import urllib.request
+import urllib.parse
+import ssl
+import http.client
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -131,6 +134,8 @@ class ManagedNodeProbeClient:
         binary: str = "sing-box",
         target_url: str = "https://www.gstatic.com/generate_204",
         expected_status: int = 204,
+        ssl_context: ssl.SSLContext | None = None,
+        auto_detect_interface: bool = True,
     ) -> None:
         if not target_url.startswith("https://") or type(expected_status) is not int:
             raise ValueError("managed-node probe target is invalid")
@@ -138,6 +143,8 @@ class ManagedNodeProbeClient:
         self._binary = binary
         self._target = target_url
         self._expected_status = expected_status
+        self._ssl_context = ssl_context or ssl.create_default_context()
+        self._auto_detect_interface = auto_detect_interface
 
     def probe_client(self, material: ProbeMaterial, *, node_id: str, deadline: float) -> CheckResult:
         checked_at = datetime.now(timezone.utc).isoformat()
@@ -195,7 +202,7 @@ class ManagedNodeProbeClient:
             "log": {"level": "error"},
             "inbounds": [{"type": "mixed", "tag": "probe-in", "listen": "127.0.0.1", "listen_port": port}],
             "outbounds": [material.client_config, {"type": "direct", "tag": "direct"}],
-            "route": {"final": tag, "auto_detect_interface": True},
+            "route": {"final": tag, "auto_detect_interface": self._auto_detect_interface},
         }
         process = None
         config_path: Path | None = None
@@ -232,14 +239,17 @@ class ManagedNodeProbeClient:
                     stage="client_start",
                     reason="sing-box client did not start before the deadline",
                 )
-            opener = urllib.request.build_opener(
-                urllib.request.ProxyHandler({"http": f"http://127.0.0.1:{port}", "https": f"http://127.0.0.1:{port}"})
-            )
+            target = urllib.parse.urlsplit(self._target)
+            connection = http.client.HTTPSConnection("127.0.0.1", port, timeout=_remaining(deadline),
+                                                     context=self._ssl_context)
+            connection.set_tunnel(target.hostname, target.port or 443)
             try:
-                response = opener.open(self._target, timeout=_remaining(deadline))
+                # An explicit CONNECT tunnel cannot be bypassed by NO_PROXY/environment settings.
+                connection.request("GET", urllib.parse.urlunsplit(("", "", target.path or "/", target.query, "")))
+                response = connection.getresponse()
                 status = response.status
                 response.close()
-            except (OSError, TimeoutError, urllib.error.URLError):
+            except (OSError, TimeoutError, http.client.HTTPException):
                 return CheckResult(
                     "connection",
                     node_id,
@@ -248,6 +258,8 @@ class ManagedNodeProbeClient:
                     stage="client_request",
                     reason="protocol client request failed",
                 )
+            finally:
+                connection.close()
             outcome = "ok" if status == self._expected_status else "error"
             return CheckResult(
                 "connection",
@@ -278,7 +290,8 @@ class ManagedNodeProbeClient:
 
     def _target_status(self, deadline: float) -> int | None:
         try:
-            direct = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            direct = urllib.request.build_opener(urllib.request.ProxyHandler({}),
+                                                urllib.request.HTTPSHandler(context=self._ssl_context))
             response = direct.open(self._target, timeout=min(3.0, _remaining(deadline)))
             status = response.status
             response.close()

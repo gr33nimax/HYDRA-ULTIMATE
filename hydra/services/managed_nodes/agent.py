@@ -132,6 +132,16 @@ class ManagedNodeAgent:
         if owner is None:
             return self._error(503, "cascade_unavailable", "application", "cascade participant owner is unavailable")
         try:
+            if path == "/v1/cascades/capabilities":
+                if payload != {}:
+                    raise ValueError("capability request must be empty")
+                return DispatchResult(200, owner.capabilities())
+            if path == "/v1/cascades/probe-state":
+                request = _cascade_request(payload, {"request"})
+                return DispatchResult(200, owner.probe_state(request))
+            if path == "/v1/cascades/publication":
+                request = _cascade_request(payload, {"request"})
+                return DispatchResult(200, owner.publication(request))
             if path == "/v1/cascades/snapshot":
                 request = _cascade_request(payload, {"request"})
                 receipt = owner.ensure_snapshot(request)

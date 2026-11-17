@@ -13,7 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from hydra.contracts.managed_node_observations import ConfirmedProfiles
+from hydra.contracts.managed_node_observations import ConfirmedProfiles, ConfirmedProfile
 from hydra.core.configuration_names import (
     apply_json_configuration_name,
     resolve_configuration_name,
@@ -43,8 +43,9 @@ class ManagedNodeProfileReader(Protocol):
 class ManagedNodeSubscriptionReader:
     """Verify a protected local bundle against its committed apply receipt."""
 
-    def __init__(self, *, profile_store: ManagedNodeProfileStore) -> None:
+    def __init__(self, *, profile_store: ManagedNodeProfileStore, cascade_profiles=None) -> None:
         self._profile_store = profile_store
+        self._cascade_profiles = cascade_profiles
 
     def profiles_for_user(self, user: User, state: AppState) -> tuple[NodeSubscriptionProfile, ...]:
         if not access_status(user)[0]:
@@ -71,6 +72,8 @@ class ManagedNodeSubscriptionReader:
             if bundle is None:
                 continue
             profiles.extend(_profiles_for_bundle(user, state, definition, bundle))
+        if self._cascade_profiles is not None:
+            profiles.extend(self._cascade_profiles(user, state))
         return tuple(profiles)
 
 
@@ -189,3 +192,32 @@ __all__ = [
     "node_profile_name_key",
     "node_profiles_for_user",
 ]
+
+
+class CascadeSubscriptionReader:
+    def __init__(self, store):
+        self.store = store
+
+    def profiles_for_user(self, user, state):
+        if not access_status(user)[0]:
+            return ()
+        result = []
+        for route in managed_nodes_from_extensions(state.feature_extensions).cascades:
+            bundle = self.store.read(state, route)
+            if bundle is None:
+                continue
+            for protocol in bundle["protocols"]:
+                for document in protocol["profiles"]:
+                    profile = ConfirmedProfile.from_document(document)
+                    if profile.user_uuid != user.uuid or profile.protocol in user.disabled_protocols:
+                        continue
+                    key = "cascade:" + profile.stable_id
+                    name = resolve_configuration_name(key=key, default=f"{route.name} · {profile.protocol}",
+                                                       global_names=state.configuration_names,
+                                                       user_names=user.configuration_name_overrides)
+                    configs = tuple(_named_config(config, key=key, name=name, user=user, state=state)
+                                    for config in profile.client_configs)
+                    links = tuple(_tag_link(link, name) for link in profile.links)
+                    result.append(NodeSubscriptionProfile("cascade-" + route.id, profile.protocol, route.id,
+                                                          name, key, links, configs))
+        return tuple(result)

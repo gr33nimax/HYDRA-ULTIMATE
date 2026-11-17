@@ -15,6 +15,7 @@ from hydra.plugins.base import (
     HealthResult,
 )
 from hydra.core.state_models import User
+from hydra.core.runtime_users import ProtectedRuntimeUser, shared_runtime_password
 from hydra.utils.crypto import derive_key, derive_hex_key
 from hydra.utils.net import public_ip
 from hydra.utils.tls import resolve_tls_material
@@ -78,7 +79,7 @@ class AnyTLSPlugin(DecoyThemeSupport, BasePlugin):
             if user.blocked:
                 continue
             username = self._derive_username(user)
-            password = self._derive_password(user.uuid)
+            password = self._password_for_user(user)
             users.append({
                 "name": username,
                 "password": password,
@@ -174,7 +175,7 @@ class AnyTLSPlugin(DecoyThemeSupport, BasePlugin):
     def on_user_add(self, user: User, state: PluginStateAccess) -> None:
         user.credentials.setdefault("anytls", {})
         user.credentials["anytls"]["username"] = self._derive_username(user)
-        user.credentials["anytls"]["password"] = self._derive_password(user.uuid)
+        user.credentials["anytls"]["password"] = self._password_for_user(user)
 
     def on_user_remove(self, user: User, state: PluginStateAccess) -> None:
         pass
@@ -193,7 +194,7 @@ class AnyTLSPlugin(DecoyThemeSupport, BasePlugin):
             return ""
 
         username = self._derive_username(user)
-        password = self._derive_password(user.uuid)
+        password = self._password_for_user(user)
         server_ip = state.network.server_ip or public_ip()
 
         outbound = {
@@ -230,7 +231,7 @@ class AnyTLSPlugin(DecoyThemeSupport, BasePlugin):
         if not anytls_domain:
             return ""
 
-        password = self._derive_password(user.uuid)
+        password = self._password_for_user(user)
         tag = urllib.parse.quote(self._derive_username(user), safe="")
         return f"anytls://{password}@{anytls_domain}:443?sni={anytls_domain}#{tag}"
 
@@ -409,6 +410,12 @@ class AnyTLSPlugin(DecoyThemeSupport, BasePlugin):
     @staticmethod
     def _derive_username(user: User) -> str:
         return user.email
+
+    @staticmethod
+    def _password_for_user(user: User) -> str:
+        if isinstance(user, ProtectedRuntimeUser) and user.shared_credentials:
+            return shared_runtime_password(user)
+        return derive_hex_key("anytls-pass", user.uuid)
 
     @staticmethod
     def _derive_password(uuid: str) -> str:

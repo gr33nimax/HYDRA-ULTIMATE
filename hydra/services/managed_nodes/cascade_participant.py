@@ -30,7 +30,7 @@ from hydra.services.managed_nodes.cascade_restore import CascadeRestoreContext
 from hydra.services.managed_nodes.cascade_leases import cascade_participants, operation_is_active
 from hydra.services.managed_nodes.records import ManagedNodeRecords
 from hydra.utils.commands import redact_text
-from hydra.utils.crypto import derive_hex_key
+from hydra.core.runtime_users import shared_runtime_password
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 ContextReader = Callable[[], tuple[str, str]]
@@ -212,7 +212,7 @@ class ManagedNodeCascadeParticipant:
         transit = scope.technical_subject(self.participant_id, request.protocol, "transit", request.operation_id)
         outbound = self._client_material(self._state_reader(), request.protocol, transit)
         ProbeMaterial(request.protocol, outbound).validate()
-        expected = transit.uuid if request.protocol == "vless" else derive_hex_key("anytls-pass", transit.uuid)
+        expected = transit.uuid if request.protocol == "vless" else shared_runtime_password(transit)
         secret_key = "uuid" if request.protocol == "vless" else "password"
         if outbound.get(secret_key) != expected:
             raise ValueError("cascade client material does not match its scoped transit identity")

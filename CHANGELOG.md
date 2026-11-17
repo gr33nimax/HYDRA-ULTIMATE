@@ -12,12 +12,14 @@
 
 ### Добавлено
 
+- Production каскады VLESS/AnyTLS: scoped credentials и auth-user routing, проверка возможностей установленного ядра, реальный whole-path client probe с подтверждением выходного счётчика, отдельная commit-gated публикация профилей и entry-only учёт трафика. Поддерживаются основа→нода, нода→основа и нода→нода. Восстановление доступно в меню каскадов; обычный sync обновляет пользователей и проверку маршрута. Нужен HydraCore с `with_v2ray_api`; неподдерживаемое ядро остаётся недоступным, без обхода проверок. Добавлен отдельный Linux real-engine acceptance workflow.
+
 - Подменю «TLS-сертификаты» рядом с Sync Agent: полный локальный инвентарь Certbot (включая неиспользуемые сертификаты), сроки и назначения, принудительный перевыпуск и удаление по точному подтверждению имени. Операции используют apply lock, snapshot/rollback lineage и TLS-служб, события apply journal; назначенный сертификат можно удалить с явным предупреждением, без отключения протоколов и без отзыва у CA. Внешние настроенные TLS-файлы доступны только для просмотра.
 - Форматы подписок FlClash/Mihomo (`format=clash`, alias `flclash`) и Happ (`format=happ`): автодетект по User-Agent, ручные ссылки в TUI, выбор только совместимых профилей основы и managed nodes; чужие NekoBox-контейнеры не попадают в Happ, неизвестные XHTTP-расширения не упрощаются для Clash.
 - Managed nodes v2: enrollment по подтверждённому SSH host key, pinned source SHA, ограниченный mTLS `/v1` agent, durable operations и локальные receipt-committed profile bundles.
 - Изменение протокола атомарно записывает definition, frozen `NodeDesired` и pending apply operation одним state CAS до network/host effects; resume продолжает с теми же operation ID и payload.
 - Apply proof привязан к digest runtime-конфигурации отдельно от process billing epoch: config-only change отзывает stale receipt, не начисляя прежние absolute counters повторно.
-- Новый TUI использует typed protocol fields и application boundary. Двух-hop cascade runtime не подключён и остаётся fail-closed; рабочий cascade маршрут не заявляется.
+- Новый TUI использует typed protocol fields и application boundary. Двух-hop cascade runtime подключён через capability/path/publication gates; недоступная возможность или неподтверждённый путь не выдаются за успешную активацию.
 
 ### Изменено
 

@@ -201,6 +201,19 @@ def generate_config(
         )
     if not any(outbound.get("tag") == "direct" for outbound in config["outbounds"]):
         config["outbounds"].append({"type": "direct", "tag": "direct"})
+    scoped = fragments.get("deployed_cascades")
+    if scoped is not None and scoped.route_rules:
+        # Only explicitly contributed authenticated subjects get cumulative counters.
+        names = sorted({name for key in ("deployed_cascades", "managed_node_cascades")
+                        for rule in fragments.get(key, ConfigFragment()).route_rules for name in rule.get("auth_user", [])})
+        port = state.install.get("cascade_stats_port", 19091)
+        if type(port) is not int or not 1024 <= port <= 65535:
+            raise ValueError("invalid loopback cascade stats port")
+        if any(inbound.get("listen_port") == port for inbound in config["inbounds"]):
+            raise ValueError("cascade stats port conflicts with a protocol listener")
+        config.setdefault("experimental", {})["v2ray_api"] = {
+            "listen": f"127.0.0.1:{port}", "stats": {"enabled": True, "users": names},
+        }
     return config
 
 

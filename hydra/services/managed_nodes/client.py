@@ -27,6 +27,7 @@ from hydra.services.managed_nodes.identity import (
     validate_certificate_identity,
 )
 from hydra.utils.commands import redact_text
+from hydra.services.managed_nodes.cascade_client_reads import CascadeClientReads
 
 T = TypeVar("T")
 MAX_REQUEST_BYTES = 1024 * 1024
@@ -44,7 +45,7 @@ class ManagedNodeError(RuntimeError):
         super().__init__(f"{kind} during {stage}: {self.reason}")
 
 
-class ManagedNodeClient:
+class ManagedNodeClient(CascadeClientReads):
     def __init__(
         self,
         *,
