@@ -35,7 +35,7 @@ class MappedProtocols:
         document = json.loads(payload)
         for outbound in document.get("outbounds", []):
             if outbound.get("type") == protocol:
-                outbound.update(server=self.owner.address, server_port=self.owner.data_port)
+                outbound.update(server=self.owner.address, server_port=self.owner.data_ports[protocol])
                 outbound["tls"]["server_name"] = "127.0.0.1"
         return json.dumps(document)
 
@@ -43,15 +43,17 @@ class MappedProtocols:
 class LiveNode(LabNode):
     def __init__(self, root, identity, protocols, *, binary, certificate, key, index):
         self.binary, self.certificate, self.key = binary, certificate, key
-        self.address, self.data_port, self.stats_port = f"127.0.0.{index + 2}", free_port(), free_port()
-        self.backend_port = free_port() if "anytls" in protocols else self.data_port
+        self.address, self.stats_port = f"127.0.0.{index + 2}", free_port()
+        self.data_ports = {name: free_port() for name in protocols}
+        self.backend_ports = {name: free_port() if name == "anytls" else port
+                              for name, port in self.data_ports.items()}
         self.frontend = None
         self.process, self.log_file = None, None
         self.engine_digest = hashlib.sha256(binary.read_bytes()).hexdigest()
         super().__init__(root, identity, protocols)
         if "anytls" in protocols:
             # Production terminates TLS in Caddy before the canonical AnyTLS inbound.
-            self.frontend = TLSFrontend(self.address, self.data_port, self.backend_port,
+            self.frontend = TLSFrontend(self.address, self.data_ports["anytls"], self.backend_ports["anytls"],
                                         root / "cert.pem", root / "key.pem")
         self.protocols = MappedProtocols(self, self.protocols)
         self.owner.protocols = self.protocols
@@ -69,7 +71,7 @@ class LiveNode(LabNode):
         for inbound in config["inbounds"]:
             inbound["listen"] = self.address
             if inbound.get("type") in {"vless", "anytls"}:
-                inbound["listen_port"] = self.backend_port
+                inbound["listen_port"] = self.backend_ports[inbound["type"]]
                 inbound.get("tls", {})["server_name"] = "127.0.0.1"
         return config
 
@@ -89,8 +91,10 @@ class LiveNode(LabNode):
             if self.process.poll() is not None:
                 raise RuntimeError("real core could not start; see isolated engine.log")
             try:
-                with socket.create_connection((self.address, self.backend_port), timeout=0.1):
-                    return
+                for port in self.backend_ports.values():
+                    with socket.create_connection((self.address, port), timeout=0.1):
+                        pass
+                return
             except OSError:
                 time.sleep(0.03)
         raise RuntimeError("real core listener did not start")

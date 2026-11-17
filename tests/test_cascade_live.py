@@ -25,8 +25,8 @@ pytestmark = pytest.mark.skipif(not CORE, reason="set HYDRA_CASCADE_CORE to run 
 
 
 @pytest.mark.parametrize("topology", [("base", "exit"), ("entry", "base"), ("entry", "exit")])
-@pytest.mark.parametrize("protocol", ["vless", "anytls"])
-def test_actual_two_hop_path_profiles_billing_and_no_exit_fallback(tmp_path, monkeypatch, topology, protocol):
+@pytest.mark.parametrize("protocols", [("vless",), ("anytls",), ("vless", "anytls")])
+def test_actual_two_hop_path_profiles_billing_and_no_exit_fallback(tmp_path, monkeypatch, topology, protocols):
     certificate, key = create_certificate_pair("lab", role="server", address="127.0.0.1")
     cert_path, key_path = tmp_path / "ca.pem", tmp_path / "key.pem"
     cert_path.write_bytes(certificate)
@@ -52,14 +52,16 @@ def test_actual_two_hop_path_profiles_billing_and_no_exit_fallback(tmp_path, mon
         created.append(node)
         return node
     try:
-        lab = CascadeLab(tmp_path / "nodes", topology=topology, protocols=(protocol,), node_factory=node_factory)
+        lab = CascadeLab(tmp_path / "nodes", topology=topology, protocols=protocols, node_factory=node_factory)
         trusted = ssl.create_default_context(cafile=str(cert_path))
         probe = ManagedNodeProbeClient(host=lab.nodes["base"].host, binary=CORE,
             target_url=f"https://127.0.0.1:{target.server_port}/", ssl_context=trusted, auto_detect_interface=False)
         def checked_probe(material, **kwargs):
+            protocol = material.protocol
             entry, exit = lab.nodes[topology[0]], lab.nodes[topology[1]]
             entry_config, exit_config = json.loads(entry.config.read_bytes()), json.loads(exit.config.read_bytes())
-            request = entry.deployments._request(entry.deployments.selected(entry.read())[0])
+            request = next(entry.deployments._request(item) for item in entry.deployments.selected(entry.read())
+                           if entry.deployments._request(item).protocol == protocol)
             scope = entry.credentials.load(request.target_id)
             first = scope.technical_subject(entry.identity, protocol, "entry", request.operation_id)
             second = scope.technical_subject(exit.identity, protocol, "transit", request.operation_id)
@@ -76,19 +78,23 @@ def test_actual_two_hop_path_profiles_billing_and_no_exit_fallback(tmp_path, mon
             assert second_out["server"] == exit.address
             return probe.probe_client(material, **kwargs)
         lab.runtime._path_publisher.probe_client = SimpleNamespace(probe_client=checked_probe)
-        route = CascadeDefinition("live-route", "Live Route", *topology, [protocol])
+        route = CascadeDefinition("live-route", "Live Route", *topology, list(protocols))
         with management_transport(lab):
             result = lab.service.save_cascade(route, confirmed=True)
             assert result.state == "succeeded", result.error
             base, entry, exit = lab.nodes["base"], lab.nodes[topology[0]], lab.nodes[topology[1]]
             exported = CascadeSubscriptionReader(lab.publications).profiles_for_user(USER, base.read())
-            assert len(exported) == 1
-            document = next(config for config in exported[0].singbox
-                            if any(item.get("type") == protocol for item in config.get("outbounds", [])))
-            outbound = next(item for item in document["outbounds"] if item.get("type") == protocol)
-            business_probe = ProbeMaterial(protocol, outbound)
-            check = probe.probe_client(business_probe, node_id=route.id, deadline=time.monotonic() + 15)
-            assert check.outcome == "ok", (check.stage, check.reason)
+            assert len(exported) == len(protocols)
+            business_probes = []
+            for protocol in protocols:
+                profile = next(item for item in exported if item.protocol == protocol)
+                document = next(config for config in profile.singbox
+                                if any(item.get("type") == protocol for item in config.get("outbounds", [])))
+                outbound = next(item for item in document["outbounds"] if item.get("type") == protocol)
+                business_probe = ProbeMaterial(protocol, outbound)
+                business_probes.append(business_probe)
+                check = probe.probe_client(business_probe, node_id=route.id, deadline=time.monotonic() + 15)
+                assert check.outcome == "ok", (check.stage, check.reason)
             entry.final_accounting()
             exit.final_accounting()
             entry_bytes = sum(item["used"] for item in entry.state.install.get("cascade_counter_baselines", {}).values())
@@ -96,7 +102,8 @@ def test_actual_two_hop_path_profiles_billing_and_no_exit_fallback(tmp_path, mon
             assert entry_bytes > 0 and transit_bytes == 0
             assert lab.service.refresh() == []
             exit.stop()
-            assert probe.probe_client(business_probe, node_id=route.id, deadline=time.monotonic() + 10).outcome != "ok"
+            for business_probe in business_probes:
+                assert probe.probe_client(business_probe, node_id=route.id, deadline=time.monotonic() + 10).outcome != "ok"
             assert lab.service.refresh()
             assert CascadeSubscriptionReader(lab.publications).profiles_for_user(USER, base.read()) == ()
             exit.write_config()
