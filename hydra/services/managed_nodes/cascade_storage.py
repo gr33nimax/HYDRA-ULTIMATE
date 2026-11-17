@@ -23,6 +23,8 @@ class CascadeArtifacts:
             if parent.is_symlink():
                 raise ValueError("unsafe cascade artifact directory")
         path = self.root / (key + ".json")
+        if self.root.exists() and (not self.root.is_dir() or (os.name != "nt" and self.root.stat().st_mode & 0o077)):
+            raise ValueError("unsafe cascade artifact directory permissions")
         if path.is_symlink():
             raise ValueError("unsafe cascade artifact path")
         return path

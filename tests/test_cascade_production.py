@@ -195,3 +195,59 @@ def test_expiry_block_new_user_and_normal_sync_rebuild_scoped_users(tmp_path):
     reader = CascadeSubscriptionReader(lab.publications)
     assert reader.profiles_for_user(new, lab.nodes["base"].read())
     assert reader.profiles_for_user(replace(USER, blocked=True), lab.nodes["base"].read()) == ()
+
+
+def test_cumulative_stats_reader_uses_real_grpc_without_resetting_counters():
+    import grpc
+    from concurrent.futures import ThreadPoolExecutor
+    from hydra.services.managed_nodes.cascade_stats import user_counters
+    def encode_varint(value):
+        result = bytearray()
+        while value >= 128:
+            result.append((value & 127) | 128)
+            value >>= 7
+        return bytes(result) + bytes([value])
+    def field(number, value):
+        return encode_varint(number * 8 + 2) + encode_varint(len(value)) + value
+    stat = lambda name, count: field(1, name.encode()) + b"\x10" + encode_varint(count)
+    response = field(1, stat("user>>>scoped-user>>>traffic>>>uplink", 130))
+    response += field(1, stat("user>>>scoped-user>>>traffic>>>downlink", 70))
+    def query(request, context):
+        assert request == b"\x1a\x07user>>>"  # no reset=true field
+        return response
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        server = grpc.server(executor)
+        handler = grpc.unary_unary_rpc_method_handler(query, request_deserializer=lambda value: value,
+                                                      response_serializer=lambda value: value)
+        server.add_generic_rpc_handlers((grpc.method_handlers_generic_handler(
+            "v2ray.core.app.stats.command.StatsService", {"QueryStats": handler}),))
+        port = server.add_insecure_port("127.0.0.1:0")
+        server.start()
+        try:
+            assert user_counters(port) == {"scoped-user": 200}
+            assert user_counters(port) == {"scoped-user": 200}
+        finally:
+            server.stop(0).wait()
+
+
+def test_canonical_anytls_probe_credentials_match_the_actual_rendered_inbound(tmp_path, monkeypatch):
+    from hydra.utils import crypto
+    key = tmp_path / "master.key"
+    key.write_bytes(b"a" * 32)
+    monkeypatch.setattr(crypto, "MASTER_KEY_FILE", key)
+    lab = CascadeLab(tmp_path / "lab", protocols=("anytls",))
+    previous = lab.runtime._path_publisher.probe_client.probe_client
+    def check(material, **kwargs):
+        for name, node in lab.nodes.items():
+            document = node.deployments.selected(node.read())[0]
+            request = node.deployments._request(document)
+            subject = node.credentials.load("route").technical_subject(name, "anytls", request.role, request.operation_id)
+            inbound = next(item for item in node.render(node.read())["inbounds"] if item.get("type") == "anytls")
+            credential = next(item["password"] for item in inbound["users"] if item["name"] == subject.email)
+            assert document["endpoint"]["password"] == credential
+            if request.role == "entry":
+                assert material.client_config["password"] == credential
+        return previous(material, **kwargs)
+    lab.runtime._path_publisher.probe_client.probe_client = check
+    result = lab.service.save_cascade(CascadeDefinition("route", "Route", "base", "exit", ["anytls"]), confirmed=True)
+    assert result.state == "succeeded", result.error

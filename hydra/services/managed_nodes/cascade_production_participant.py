@@ -11,6 +11,7 @@ from hydra.services.managed_nodes.accounting import traffic_reset_epoch
 from hydra.services.managed_nodes.cascade_participant import ManagedNodeCascadeParticipant
 from hydra.services.managed_nodes.cascade_participant_removal import prepare_removal
 from hydra.services.managed_nodes.cascade_stats import user_counters
+from hydra.services.managed_nodes.cascade_deployment import credential_outbound
 from hydra.services.managed_nodes.profiles import ManagedNodeProfileBuilder
 from hydra.services.user_access import access_status
 
@@ -54,7 +55,13 @@ class ProductionCascadeParticipant(ManagedNodeCascadeParticipant):
         subject = scope.technical_subject(self.participant_id, request.protocol, request.role, request.operation_id)
         endpoint = self._client_material(self._state_reader(), request.protocol, subject)
         ProbeMaterial(request.protocol, endpoint).validate()
+        if credential_outbound(endpoint, request.protocol, subject) != endpoint:
+            raise ValueError("cascade endpoint credential differs from its scoped identity")
         peer = material.outbound if material is not None else None
+        if peer is not None:
+            transit = scope.technical_subject(request.route.exit_id, request.protocol, "transit", request.operation_id)
+            if credential_outbound(peer, request.protocol, transit) != peer:
+                raise ValueError("cascade transit credential differs from its scoped identity")
         self.deployments.stage(request, peer, endpoint)
         engine, config = self._context()
         digest = canonical_digest(endpoint) if request.role == "transit" else None

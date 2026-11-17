@@ -5,6 +5,8 @@ import os
 import ssl
 import threading
 import time
+import json
+from types import SimpleNamespace
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -54,7 +56,26 @@ def test_actual_two_hop_path_profiles_billing_and_no_exit_fallback(tmp_path, mon
         trusted = ssl.create_default_context(cafile=str(cert_path))
         probe = ManagedNodeProbeClient(host=lab.nodes["base"].host, binary=CORE,
             target_url=f"https://127.0.0.1:{target.server_port}/", ssl_context=trusted, auto_detect_interface=False)
-        lab.runtime._path_publisher.probe_client = probe
+        def checked_probe(material, **kwargs):
+            entry, exit = lab.nodes[topology[0]], lab.nodes[topology[1]]
+            entry_config, exit_config = json.loads(entry.config.read_bytes()), json.loads(exit.config.read_bytes())
+            request = entry.deployments._request(entry.deployments.selected(entry.read())[0])
+            scope = entry.credentials.load(request.target_id)
+            first = scope.technical_subject(entry.identity, protocol, "entry", request.operation_id)
+            second = scope.technical_subject(exit.identity, protocol, "transit", request.operation_id)
+            key = "uuid" if protocol == "vless" else "password"
+            first_in = next(user for inbound in entry_config["inbounds"] if inbound.get("type") == protocol
+                            for user in inbound["users"] if user["name"] == first.email)
+            second_in = next(user for inbound in exit_config["inbounds"] if inbound.get("type") == protocol
+                             for user in inbound["users"] if user["name"] == second.email)
+            rule = next(item for item in entry_config["route"]["rules"] if item.get("auth_user") == [first.email])
+            second_out = next(item for item in entry_config["outbounds"] if item.get("tag") == rule["outbound"])
+            assert material.client_config[key] == first_in[key], "first-hop client/server credentials differ"
+            assert second_out[key] == second_in[key], "transit client/server credentials differ"
+            assert material.client_config["server"] == entry.address
+            assert second_out["server"] == exit.address
+            return probe.probe_client(material, **kwargs)
+        lab.runtime._path_publisher.probe_client = SimpleNamespace(probe_client=checked_probe)
         route = CascadeDefinition("live-route", "Live Route", *topology, [protocol])
         with management_transport(lab):
             result = lab.service.save_cascade(route, confirmed=True)
@@ -66,7 +87,8 @@ def test_actual_two_hop_path_profiles_billing_and_no_exit_fallback(tmp_path, mon
                             if any(item.get("type") == protocol for item in config.get("outbounds", [])))
             outbound = next(item for item in document["outbounds"] if item.get("type") == protocol)
             business_probe = ProbeMaterial(protocol, outbound)
-            assert probe.probe_client(business_probe, node_id=route.id, deadline=time.monotonic() + 15).outcome == "ok"
+            check = probe.probe_client(business_probe, node_id=route.id, deadline=time.monotonic() + 15)
+            assert check.outcome == "ok", (check.stage, check.reason)
             entry.final_accounting()
             exit.final_accounting()
             entry_bytes = sum(item["used"] for item in entry.state.install.get("cascade_counter_baselines", {}).values())

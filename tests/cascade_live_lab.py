@@ -25,7 +25,13 @@ class MappedProtocols:
         return getattr(self.original, name)
 
     def singbox_client_config(self, state, protocol, user, **kwargs):
-        document = json.loads(self.original.singbox_client_config(state, protocol, user, **kwargs))
+        return self._map(self.original.singbox_client_config(state, protocol, user, **kwargs), protocol)
+
+    def client_config(self, state, protocol, user, **kwargs):
+        return self._map(self.original.client_config(state, protocol, user, **kwargs), protocol)
+
+    def _map(self, payload, protocol):
+        document = json.loads(payload)
         for outbound in document.get("outbounds", []):
             if outbound.get("type") == protocol:
                 outbound.update(server=self.owner.address, server_port=self.owner.data_port)
