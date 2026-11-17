@@ -14,6 +14,7 @@ from hydra.services.managed_nodes.accounting import apply_traffic_samples
 from hydra.services.managed_nodes.cascade_stats import user_counters
 from hydra.services.managed_nodes.probe_clients import _stop_process
 from tests.cascade_lab import LabNode
+from tests.cascade_tls_frontend import TLSFrontend
 
 
 class MappedProtocols:
@@ -43,9 +44,15 @@ class LiveNode(LabNode):
     def __init__(self, root, identity, protocols, *, binary, certificate, key, index):
         self.binary, self.certificate, self.key = binary, certificate, key
         self.address, self.data_port, self.stats_port = f"127.0.0.{index + 2}", free_port(), free_port()
+        self.backend_port = free_port() if "anytls" in protocols else self.data_port
+        self.frontend = None
         self.process, self.log_file = None, None
         self.engine_digest = hashlib.sha256(binary.read_bytes()).hexdigest()
         super().__init__(root, identity, protocols)
+        if "anytls" in protocols:
+            # Production terminates TLS in Caddy before the canonical AnyTLS inbound.
+            self.frontend = TLSFrontend(self.address, self.data_port, self.backend_port,
+                                        root / "cert.pem", root / "key.pem")
         self.protocols = MappedProtocols(self, self.protocols)
         self.owner.protocols = self.protocols
         self.owner.capability_probe = InstalledCascadeCapabilities(host=self.host, binary=str(binary))
@@ -62,7 +69,7 @@ class LiveNode(LabNode):
         for inbound in config["inbounds"]:
             inbound["listen"] = self.address
             if inbound.get("type") in {"vless", "anytls"}:
-                inbound["listen_port"] = self.data_port
+                inbound["listen_port"] = self.backend_port
                 inbound.get("tls", {})["server_name"] = "127.0.0.1"
         return config
 
@@ -82,7 +89,7 @@ class LiveNode(LabNode):
             if self.process.poll() is not None:
                 raise RuntimeError("real core could not start; see isolated engine.log")
             try:
-                with socket.create_connection((self.address, self.data_port), timeout=0.1):
+                with socket.create_connection((self.address, self.backend_port), timeout=0.1):
                     return
             except OSError:
                 time.sleep(0.03)
@@ -114,3 +121,8 @@ class LiveNode(LabNode):
             if self.identity == "base":
                 apply_traffic_samples(state, "base-cascades", samples)
         self.update(mutate)
+
+    def close(self):
+        self.stop()
+        if self.frontend is not None:
+            self.frontend.close()

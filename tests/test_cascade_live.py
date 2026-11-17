@@ -105,7 +105,7 @@ def test_actual_two_hop_path_profiles_billing_and_no_exit_fallback(tmp_path, mon
             assert all(not node.credentials.exists(route.id) for node in lab.nodes.values())
     finally:
         for node in created:
-            node.stop()
+            node.close()
         target.shutdown()
         target.server_close()
         thread.join(timeout=1)
