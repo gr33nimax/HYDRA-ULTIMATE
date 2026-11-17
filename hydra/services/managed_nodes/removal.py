@@ -1,4 +1,4 @@
-"""Confirmed remote uninstall with durable receipt-gated local cleanup."""
+"""Confirmed remote uninstall and explicitly local-only enrollment removal."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from hydra.contracts.managed_node_installation import InstallPlan
 from hydra.contracts.managed_node_models import Operation, canonical_digest
 from hydra.services.managed_nodes.credentials import ManagementCredentialStore, SshPasswordChannel
 from hydra.services.managed_nodes.records import ManagedNodeRecords
+from hydra.services.managed_nodes.removal_records import forget_definition
 from hydra.services.managed_nodes.ssh import ManagedNodeSSH, SshOperationError
 from hydra.utils.commands import redact_text
 
@@ -26,6 +27,39 @@ class NodeRemovalService:
         self._ssh = ssh
         self._credentials = credentials
         self._new_operation_id = operation_id_factory
+
+    def forget(self, node_id: str, *, confirmed: bool, progress=None) -> Operation:
+        """Remove only local enrollment; never contact or claim to clean the VPS."""
+        if type(confirmed) is not bool or not confirmed:
+            raise ValueError("local node removal requires explicit confirmation")
+        definition = self._records.find_definition(node_id)
+        if definition is None:
+            raise KeyError(f"unknown managed node {node_id}")
+        previous = next(
+            (item for item in reversed(self._records.list_operations())
+             if item.kind == "forget" and item.target_id == node_id and item.state != "succeeded"), None,
+        )
+        if previous is not None:
+            return self.resume(previous.id, ssh_auth=None, progress=progress)
+        plan = {"definition": definition.to_document()}
+        operation = self._records.begin_forget(Operation(
+            self._new_operation_id(), "forget", node_id, canonical_digest(plan), "pending", plan=plan,
+        ))
+        return self._finish_forget(operation, progress)
+
+    def _finish_forget(self, operation: Operation, progress) -> Operation:
+        definition = forget_definition(operation)
+        try:
+            if "credential_cleanup" not in operation.completed_steps:
+                self._records.begin_step(operation.id, "credential_cleanup")
+                _notify(progress, operation.id, "credential_cleanup", "started")
+                self._credentials.cleanup(definition.identity_ref)
+                self._records.complete_step(operation.id, "credential_cleanup")
+            result = self._records.complete_forget(operation.id)
+        except Exception as exc:
+            return self._fail(operation.id, exc, recovery_required=True, progress=progress)
+        _notify(progress, operation.id, "local_removal", "succeeded")
+        return result
 
     def remove(
         self,
@@ -79,10 +113,14 @@ class NodeRemovalService:
         progress: Callable[[dict[str, str]], None] | None = None,
     ) -> Operation:
         operation = self._records.find_operation(operation_id)
-        if operation is None or operation.kind != "remove":
+        if operation is None or operation.kind not in {"remove", "forget"}:
             raise KeyError(f"unknown managed-node removal operation {operation_id}")
         if operation.state == "succeeded":
             return operation
+        if operation.error and operation.error.get("stage") == "removal":
+            return operation
+        if operation.kind == "forget":
+            return self._finish_forget(operation, progress)
         install_plan = _plan_from_operation(operation)
         if operation.remote_removal_confirmed:
             return self._finish_local(operation, progress)
@@ -164,7 +202,7 @@ class NodeRemovalService:
         progress: Callable[[dict[str, str]], None] | None,
     ) -> Operation:
         stage = str(getattr(error, "stage", "node-removal"))
-        reason = redact_text(str(error))[:256]
+        reason = redact_text(str(getattr(error, "reason", error)))[:256]
         operation = self._records.fail_operation(
             operation_id, stage=stage, reason=reason,
             recovery_required=recovery_required,

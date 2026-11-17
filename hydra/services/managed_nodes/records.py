@@ -19,13 +19,12 @@ from hydra.core.state_managed_nodes import (
     store_managed_nodes,
 )
 from hydra.core.state_models import AppState
-from hydra.services.managed_nodes import cascade_leases
+from hydra.services.managed_nodes import cascade_leases, removal_records
+from hydra.services.managed_nodes.diagnostics import safe_reason as _safe_reason
 from hydra.services.managed_nodes.cascade_participant_records import (
     complete_removal as _complete_removal,
     release_participant_operation as _release_participant_operation,
 )
-from hydra.services.managed_nodes.removal_records import begin_removal as _begin_removal
-from hydra.utils.commands import redact_text
 
 T = TypeVar("T")
 StateReader = Callable[[], AppState]
@@ -307,7 +306,7 @@ class ManagedNodeRecords:
         _release_participant_operation(self._state_updater, operation_id, plan_digest, participant_id, terminal_state)
 
     def begin_removal(self, operation: Operation, *, installation: Operation) -> Operation:
-        return _begin_removal(self._state_updater, operation, installation=installation)
+        return removal_records.begin_removal(self._state_updater, operation, installation=installation)
 
     def find_operation(self, operation_id: str) -> Operation | None:
         return next((copy.deepcopy(item) for item in self.read_namespace().operations if item.id == operation_id), None)
@@ -490,10 +489,11 @@ class ManagedNodeRecords:
     def complete_removal(self, operation_id: str) -> bool:
         return _complete_removal(self._state_updater, operation_id)
 
+    def begin_forget(self, operation: Operation) -> Operation:
+        return removal_records.begin_forget(self._state_updater, operation)
 
-def _safe_reason(reason: str) -> str:
-    text = redact_text(str(reason))
-    return "".join(char for char in text if char.isprintable())[:256]
+    def complete_forget(self, operation_id: str) -> Operation:
+        return removal_records.complete_forget(self._state_updater, operation_id)
 
 
 __all__ = ["ManagedNodeRecords", "StateReader", "StateUpdater"]

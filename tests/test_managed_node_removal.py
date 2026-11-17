@@ -86,7 +86,8 @@ def installed_node(records: ManagedNodeRecords, *, complete: bool = True) -> Ins
     return plan
 
 
-def make_service(tmp_path: Path, remote: RemovalRemote, *, cleanup=None, complete=True):
+def make_service(tmp_path: Path, remote: RemovalRemote, *, cleanup=None, complete=True,
+                 operation_id_factory=lambda: "remove-1"):
     records = ManagedNodeRecords(state_reader=state_backend.load_state, state_updater=state_backend.update_state)
     installed_node(records, complete=complete)
     credentials = cleanup or ManagementCredentialStore(host=HostBackend(), root=tmp_path / "credentials")
@@ -95,7 +96,7 @@ def make_service(tmp_path: Path, remote: RemovalRemote, *, cleanup=None, complet
         ssh=remote,
         credentials=credentials,
         revision_resolver=lambda _branch: _SHA,
-        operation_id_factory=lambda: "remove-1",
+        operation_id_factory=operation_id_factory,
     )
     return service, records
 
@@ -292,3 +293,133 @@ def test_incomplete_node_removal_does_not_change_sibling_node_or_users(tmp_path:
     assert records.find_operation(sibling_install.id) == sibling_install
     after = state_backend.load_state()
     assert after.users == before.users and after.install == before.install
+
+
+@pytest.mark.parametrize("complete", [True, False])
+def test_forget_offline_node_removes_credentials_without_ssh_or_remote_receipt(tmp_path, complete):
+    remote = RemovalRemote(online=False)
+    credentials = ManagementCredentialStore(host=HostBackend(), root=tmp_path / "credentials")
+    service, records = make_service(tmp_path, remote, cleanup=credentials, complete=complete)
+    identity_ref = records.find_definition("de-1").identity_ref
+    credentials.ensure_client_identity(identity_ref)
+    assert list((tmp_path / "credentials").rglob("*.key"))
+    result = service.forget("de-1", True)
+    assert result.kind == "forget" and result.state == "succeeded"
+    assert result.remote_removal_confirmed is False
+    assert records.find_definition("de-1") is None and remote.calls == 0
+    assert not list((tmp_path / "credentials").rglob("*.key"))
+    assert service.resume(result.id, None) == result
+
+
+def test_forget_supersedes_failed_remote_removal_and_cannot_resume_it(tmp_path):
+    remote = RemovalRemote(online=False)
+    ids = iter(("remove-1", "forget-1"))
+    service, records = make_service(tmp_path, remote, operation_id_factory=lambda: next(ids))
+    failed = service.remove("de-1", True, None)
+    assert failed.state == "recovery_required"
+    result = service.forget("de-1", True)
+    assert result.state == "succeeded" and not result.remote_removal_confirmed
+    superseded = records.find_operation(failed.id)
+    assert superseded.state == "failed" and superseded.active_step is None
+    assert service.resume(failed.id, None) == superseded
+    with pytest.raises(ValueError, match="superseded by removal"):
+        records.begin_step(failed.id, "remote_uninstall")
+    assert remote.calls == 1
+
+
+def test_forget_retries_local_cleanup_after_restart_without_ssh(tmp_path):
+    class FailCleanupOnce(ManagementCredentialStore):
+        def cleanup(self, identity_ref):
+            if not getattr(self, "attempted", False):
+                self.attempted = True
+                raise OSError("credential store unavailable")
+            super().cleanup(identity_ref)
+
+    remote = RemovalRemote(online=False)
+    credentials = FailCleanupOnce(host=HostBackend(), root=tmp_path / "credentials")
+    service, records = make_service(tmp_path, remote, cleanup=credentials, complete=False)
+    first = service.forget("de-1", True)
+    assert first.state == "recovery_required" and not first.remote_removal_confirmed
+    assert records.find_definition("de-1") is not None
+    restarted = ManagedNodeOperationsService(
+        records=records, ssh=remote, credentials=credentials, revision_resolver=lambda _: _SHA,
+        operation_id_factory=lambda: pytest.fail("must resume the persisted forget intent"),
+    )
+    result = restarted.forget("de-1", True)
+    assert result.id == first.id and result.state == "succeeded"
+    assert records.find_definition("de-1") is None and remote.calls == 0
+    assert service.resume("install-done", None).error["stage"] == "removal"
+
+
+@pytest.mark.parametrize("confirmed", [False, None, 1, "yes"])
+def test_forget_requires_explicit_confirmation(tmp_path, confirmed):
+    remote = RemovalRemote(online=False)
+    service, records = make_service(tmp_path, remote)
+    before = state_backend.load_state()
+    with pytest.raises(ValueError, match="confirmation"):
+        service.forget("de-1", confirmed)
+    assert state_backend.load_state() == before and remote.calls == 0
+
+
+def test_forget_missing_install_plan_preserves_other_nodes_and_users(tmp_path):
+    remote = RemovalRemote(online=False)
+    service, records = make_service(tmp_path, remote)
+    sibling = replace(records.find_definition("de-1"), id="uk-1", name="UK", identity_ref="node/uk-1")
+    records.put_definition(sibling)
+    state_backend.update_state(lambda state: state.feature_extensions["managed_nodes"].update(operations=[]))
+    before = state_backend.load_state()
+    assert service.forget("de-1", True).state == "succeeded"
+    assert records.find_definition(sibling.id) == sibling
+    after = state_backend.load_state()
+    assert after.users == before.users and after.install == before.install and remote.calls == 0
+
+
+@pytest.mark.parametrize("active_cascade", [False, True])
+def test_forget_rejects_cascade_participants_before_cleaning_credentials(tmp_path, active_cascade):
+    from unittest.mock import Mock
+    remote = RemovalRemote(online=False)
+    credentials = Mock()
+    service, records = make_service(tmp_path, remote, cleanup=credentials)
+    cascade = CascadeDefinition("route-1", "route", "base", "de-1", [])
+    if active_cascade:
+        plan = {"cascade_id": cascade.id, "previous": None, "cascade": cascade.to_document()}
+        records.begin_operation(Operation("route-save", "cascade_save", cascade.id, canonical_digest(plan),
+                                          "pending", plan=plan))
+    else:
+        records.put_cascade(cascade)
+    before = state_backend.load_state()
+    with pytest.raises(ValueError, match="cascade"):
+        service.forget("de-1", True)
+    assert state_backend.load_state() == before and remote.calls == 0
+    credentials.cleanup.assert_not_called()
+
+
+def test_forget_cannot_claim_completion_before_local_cleanup(tmp_path):
+    remote = RemovalRemote(online=False)
+    service, records = make_service(tmp_path, remote)
+    definition = records.find_definition("de-1")
+    plan = {"definition": definition.to_document()}
+    op = records.begin_forget(Operation("forget-1", "forget", definition.id, canonical_digest(plan),
+                                        "pending", plan=plan))
+    with pytest.raises(ValueError, match="cleanup must complete"):
+        records.complete_forget(op.id)
+    assert records.find_definition(definition.id) is not None and remote.calls == 0
+
+
+def test_forget_rejects_definition_changed_before_commit_without_cleaning_credentials(tmp_path):
+    from unittest.mock import Mock
+    remote = RemovalRemote(online=False)
+    credentials = Mock()
+    service, records = make_service(tmp_path, remote, cleanup=credentials)
+    original_begin = records.begin_forget
+
+    def change_before_begin(operation):
+        records.put_definition(replace(records.find_definition("de-1"), address="203.0.113.99"))
+        return original_begin(operation)
+
+    records.begin_forget = change_before_begin
+    with pytest.raises(ValueError, match="node changed"):
+        service.forget("de-1", True)
+    credentials.cleanup.assert_not_called()
+    assert not any(op.kind == "forget" for op in records.list_operations())
+    assert remote.calls == 0

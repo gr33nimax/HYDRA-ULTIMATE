@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 
+import pytest
+
 from hydra.contracts.managed_node_models import NodeDefinition, Operation, ProtocolAssignment
 from hydra.contracts.managed_node_observations import CheckResult, NodeView
 from hydra.core.host import HOST
@@ -204,3 +206,46 @@ def test_awg_card_reports_configuration_when_native_connection_probe_is_unavaila
     view = ManagedNodeStatusService(records=records, observations=observations, state_reader=lambda: state).list()[0]
     assert view.protocol_checks["amneziawg"] == configuration
     assert "AmneziaWG: ✅ (конфигурация)" in render_node_card(view, now=now)
+
+
+@pytest.mark.parametrize("confirmed", [True, False])
+def test_local_removal_never_prompts_for_ssh_password(monkeypatch, confirmed):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    from hydra.ui._menus import managed_nodes
+
+    app = MagicMock()
+    app.nodes.list_cascades.return_value = []
+    app.nodes.forget.return_value = Operation("forget-1", "forget", "uk-1", "a" * 64, "succeeded")
+    view = SimpleNamespace(definition=SimpleNamespace(id="uk-1", name="Великобритания"))
+    monkeypatch.setattr(managed_nodes, "menu", lambda *args: "2")
+    confirmations = []
+    monkeypatch.setattr(managed_nodes, "confirm", lambda text, **kwargs: confirmations.append(text) or confirmed)
+    monkeypatch.setattr(managed_nodes, "ask_secret", lambda *args: pytest.fail("local removal must not request SSH"))
+    monkeypatch.setattr(managed_nodes, "_show_report", lambda *args: None)
+    monkeypatch.setattr(managed_nodes, "info", lambda *args: None)
+    assert managed_nodes._remove_node(view, app) is confirmed
+    assert "останутся" in confirmations[0]
+    if confirmed:
+        app.nodes.forget.assert_called_once_with("uk-1", True)
+    else:
+        app.nodes.forget.assert_not_called()
+    app.nodes.remove.assert_not_called()
+
+
+def test_remote_removal_still_supports_ssh_key(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import MagicMock
+    from hydra.ui._menus import managed_nodes
+
+    app = MagicMock()
+    app.nodes.list_cascades.return_value = []
+    app.nodes.remove.return_value = Operation("remove-1", "remove", "uk-1", "a" * 64, "succeeded")
+    view = SimpleNamespace(definition=SimpleNamespace(id="uk-1", name="UK"))
+    monkeypatch.setattr(managed_nodes, "menu", lambda *args: "1")
+    monkeypatch.setattr(managed_nodes, "confirm", lambda *args, **kwargs: True)
+    monkeypatch.setattr(managed_nodes, "ask_secret", lambda *args: "")
+    monkeypatch.setattr(managed_nodes, "_show_report", lambda *args: None)
+    assert managed_nodes._remove_node(view, app)
+    app.nodes.remove.assert_called_once_with("uk-1", True, None)
+    app.nodes.forget.assert_not_called()

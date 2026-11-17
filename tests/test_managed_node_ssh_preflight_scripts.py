@@ -215,3 +215,31 @@ def test_remove_runs_standard_uninstall_and_requires_clean_result(tmp_path, clea
             owner.remove_node(plan, None)
     assert probes == 2
     assert commands.count("cd /opt/hydra && sudo -n /opt/hydra/.venv/bin/python -m hydra.cli uninstall --yes") == 1
+
+
+@pytest.mark.parametrize("stderr, reason", [
+    (b"@" * 60 + b"\n@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @\n" + b"@" * 60,
+     "SSH host key изменился"),
+    (b"Host key verification failed.", "закреплённый SSH host key"),
+    (b"operator@203.0.113.4: Permission denied (publickey,password).", "отклонил авторизацию"),
+    (b"ssh: connect to host 203.0.113.4 port 22: Connection timed out", "недоступен по SSH"),
+])
+def test_remove_ssh_diagnostics_explain_failure_without_banner_or_disabling_pinning(tmp_path, stderr, reason):
+    from hydra.core import state as state_backend
+    from hydra.services.managed_nodes.records import ManagedNodeRecords
+
+    records = ManagedNodeRecords(state_reader=state_backend.load_state, state_updater=state_backend.update_state)
+    plan = installed_node(records)
+    commands = []
+
+    def run(args, **kwargs):
+        commands.append(args)
+        assert "-oStrictHostKeyChecking=yes" in args
+        return CompletedProcess(args, 255, b"", stderr)
+
+    owner = ssh.OpenSshManagedNodeSSH(host=SimpleNamespace(run=run), known_hosts_root=tmp_path / "known-hosts")
+    with pytest.raises(ssh.SshOperationError) as failure:
+        owner.remove_node(plan, None)
+    assert reason in failure.value.reason and "@@@" not in failure.value.reason
+    assert len(commands) == 1
+    assert "uninstall --yes" not in commands[0][-1]

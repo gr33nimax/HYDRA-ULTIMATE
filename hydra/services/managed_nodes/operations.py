@@ -24,6 +24,7 @@ from hydra.services.managed_nodes.sync import ManagedNodeSyncService
 
 
 class ManagedNodeOperations(Protocol):
+    def forget(self, node_id: str, confirmed: bool, progress=None) -> Operation: ...
     def profiles_for_user(self, user: User, state: AppState) -> tuple[Any, ...]: ...
     def local_identity(self) -> ManagementIdentity | None: ...
     def discover_host_key(self, address: str, port: int) -> str: ...
@@ -70,6 +71,9 @@ class ManagedNodeOperations(Protocol):
 
 
 class UnavailableManagedNodeOperations:
+    def forget(self, node_id: str, confirmed: bool, progress=None) -> Operation:
+        raise RuntimeError("managed-node operations are unavailable")
+
     def profiles_for_user(self, user: User, state: AppState) -> tuple[Any, ...]:
         del user, state
         return ()
@@ -278,7 +282,7 @@ class ManagedNodeOperationsService:
         if operation.kind == "install":
             operation = self._installation.resume(operation_id, ssh_auth=ssh_auth, progress=progress)
             return self._finish_install_apply(operation, progress)
-        if operation.kind == "remove":
+        if operation.kind in {"remove", "forget"}:
             return self._removal.resume(operation_id, ssh_auth=ssh_auth, progress=progress)
         raise ValueError("managed-node operation kind is unsupported")
 
@@ -330,6 +334,9 @@ class ManagedNodeOperationsService:
             self._sync_service.sync(operation.target_id, progress)
             return self._records.find_operation(operation.id) or operation
         return operation
+
+    def forget(self, node_id: str, confirmed: bool, progress=None) -> Operation:
+        return self._removal.forget(node_id, confirmed=confirmed, progress=progress)
 
     def remove(
         self,

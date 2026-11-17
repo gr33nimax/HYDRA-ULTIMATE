@@ -58,7 +58,8 @@ class ManagedNodeSubscriptionReader:
         removal_pending = {
             operation.target_id
             for operation in namespace.operations
-            if operation.kind == "remove" and operation.state != "succeeded"
+            if operation.kind in {"remove", "forget"} and operation.state != "succeeded"
+            and not (operation.error and operation.error.get("stage") == "removal")
         }
         profiles: list[NodeSubscriptionProfile] = []
         for definition in namespace.definitions:

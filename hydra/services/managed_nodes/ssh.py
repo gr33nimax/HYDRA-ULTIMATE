@@ -15,6 +15,7 @@ from hydra.contracts.managed_node_models import NodeDefinition, Operation
 from hydra.core.host import HostBackend
 from hydra.core.uninstall import CRON_PATHS, DATA_PATHS, PROGRAM_PATHS, SYSTEM_SERVICES
 from hydra.services.managed_nodes.credentials import SshPasswordChannel
+from hydra.services.managed_nodes.diagnostics import ssh_failure_reason
 from hydra.utils.commands import bounded_reason, redact_text
 
 _REPO_URL = "https://github.com/gr33nimax/HYDRA-ULTIMATE"
@@ -465,7 +466,7 @@ class OpenSshManagedNodeSSH:
         if result.returncode != 0 and not allow_failure:
             raise SshOperationError(
                 stage,
-                bounded_reason(result) or "SSH operation failed",
+                ssh_failure_reason(result),
                 outcome_unknown=stage not in {"ssh-preflight", "host-key"},
             )
         return result
