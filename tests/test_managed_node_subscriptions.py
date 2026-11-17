@@ -56,3 +56,36 @@ def test_uncommitted_or_unconfirmed_profile_bundle_is_never_exported(tmp_path: P
 
     current = state_backend.load_state()
     assert ManagedNodeSubscriptionReader(profile_store=store).profiles_for_user(current.users[0], current) == ()
+
+
+def test_local_removal_hides_profiles_while_pending_and_after_completion(tmp_path):
+    from unittest.mock import Mock
+    from hydra.services.managed_nodes.removal import NodeRemovalService
+
+    user = User("one@example.test", "user-1")
+    state_backend.save_state(AppState(users=[user]))
+    records = ManagedNodeRecords(state_reader=state_backend.load_state, state_updater=state_backend.update_state)
+    definition = NodeDefinition("de-1", "Germany", "203.0.113.4", "root", "dev", "a" * 40,
+                                24443, [], "managed-node/de-1")
+    records.put_definition(definition)
+    profile = ConfirmedProfile("p1", user.uuid, "vless", "direct", links=["vless://one@203.0.113.4:443"])
+    digest = canonical_digest([profile.to_document()])
+    receipt = ApplyReceipt("apply-1", 1, "b" * 64, "runtime-1", "c" * 64, digest)
+    store = ManagedNodeProfileStore(host=HOST, root=tmp_path / "profiles")
+    store.commit(ConfirmedProfiles(definition.id, receipt, [profile], digest), expected_users={user.uuid})
+    records.begin_operation(Operation("apply-1", "apply", definition.id, receipt.desired_digest,
+                                      "succeeded", receipt=receipt))
+    reader = ManagedNodeSubscriptionReader(profile_store=store)
+    assert reader.profiles_for_user(user, state_backend.load_state())
+    credentials = Mock()
+    credentials.cleanup.side_effect = [OSError("cleanup interrupted"), None]
+    remote = Mock()
+    removal = NodeRemovalService(records=records, ssh=remote, credentials=credentials,
+                                 operation_id_factory=lambda: "forget-1")
+    operation = removal.forget(definition.id, confirmed=True)
+    assert operation.state == "recovery_required"
+    assert records.find_definition(definition.id) is not None
+    assert reader.profiles_for_user(user, state_backend.load_state()) == ()
+    assert removal.resume(operation.id, ssh_auth=None).state == "succeeded"
+    assert reader.profiles_for_user(user, state_backend.load_state()) == ()
+    assert not remote.mock_calls

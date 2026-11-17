@@ -139,7 +139,7 @@ def _node_card(view: NodeView, app: ApplicationService) -> None:
             ("1", "Протоколы", "настройки, названия конфигураций и удаление"),
             ("2", "Синхронизировать", "обновить пользователей и настройки этой ноды"),
             ("3", "Диагностика", "проверить связь, протоколы и подписки"),
-            ("4", "Удалить ноду", "удалить HYDRA с сервера и убрать ноду из подписок"),
+            ("4", "Удалить ноду", "с очисткой сервера или только из панели, без SSH"),
         ]
         if _can_resume_install(view):
             options.append(("5", "Продолжить установку", "проверить незавершённый этап и применить конфигурацию"))
@@ -202,6 +202,28 @@ def _remove_node(view: NodeView, app: ApplicationService) -> bool:
         panel("СНАЧАЛА УДАЛИТЕ КАСКАДЫ", [f"{item.name}: {item.entry_id} → {item.exit_id}" for item in cascades])
         error("Нода используется в каскадах. Сначала удалите их, затем повторите удаление ноды.")
         return False
+    mode = menu(
+        [
+            ("1", "Удалить HYDRA с сервера и ноду", "требуется SSH-доступ к серверу"),
+            ("2", "Удалить только из панели и подписок", "без SSH; подходит для недоступного сервера"),
+            ("0", "Отмена", ""),
+        ],
+        "УДАЛЕНИЕ НОДЫ",
+    )
+    if mode == "2":
+        if not confirm(
+            f"Убрать ноду {view.definition.name} из панели и подписок? "
+            "HYDRA и пользователи на её сервере останутся; для очистки нужен доступ к серверу.",
+            default=False,
+        ):
+            return False
+        result = app.nodes.forget(view.definition.id, True)
+        _show_report("УДАЛЕНИЕ ИЗ ПАНЕЛИ", result)
+        if result.state == "succeeded":
+            info("Нода удалена из панели и подписок. Очистка сервера не выполнялась.")
+        return result.state == "succeeded"
+    if mode != "1":
+        return False
     if not confirm(
         f"Удалить HYDRA и ноду {view.definition.name}? Профили этой ноды исчезнут из подписок.",
         default=False,
@@ -217,6 +239,8 @@ def _remove_node(view: NodeView, app: ApplicationService) -> bool:
     with auth_context as auth:
         result = app.nodes.remove(view.definition.id, True, auth)
     _show_report("УДАЛЕНИЕ НОДЫ", result)
+    if result.state != "succeeded":
+        info("Нода сохранена. Для удаления без SSH выберите «Удалить только из панели и подписок».")
     return result.state == "succeeded"
 
 
