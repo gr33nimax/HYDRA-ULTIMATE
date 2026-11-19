@@ -27,11 +27,13 @@ def build_node_desired(
         assignment_from_user(user, reset_epoch=traffic_reset_epoch(state, user))
         for user in state.users
     ]
+    cascades = [route for route in records.read_namespace().cascades if definition.id in {route.entry_id, route.exit_id}]
     candidate = NodeDesired(
         node_id=definition.id,
         revision=revision,
         users=users,
         protocols=list(definition.protocols),
+        cascades=cascades,
     )
     if previous is not None and candidate.digest != previous.desired_digest:
         candidate = NodeDesired(
@@ -39,6 +41,7 @@ def build_node_desired(
             revision=revision + 1,
             users=users,
             protocols=list(definition.protocols),
+            cascades=cascades,
         )
     candidate.validate()
     return candidate

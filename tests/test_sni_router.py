@@ -439,6 +439,17 @@ def test_trusttunnel_auth_proxy_has_bounded_response_and_dedicated_log():
     ]
 
 
+@pytest.fixture
+def isolated_caddy_runtime(monkeypatch, tmp_path):
+    from hydra.core import decoy, sni_router, source_transparency
+
+    for setting in ("SERVICE_FILE", "SOURCE_SERVICE_FILE", "RELAY_SERVICE_FILE", "CADDY_CFG"):
+        monkeypatch.setattr(sni_router, setting, tmp_path / getattr(sni_router, setting).name)
+    monkeypatch.setattr(source_transparency, "clear", MagicMock())
+    monkeypatch.setattr(decoy, "ensure_decoy_site", MagicMock())
+
+
+@pytest.mark.usefixtures("isolated_caddy_runtime")
 def test_rebuild_starts_caddy():
     """rebuild() generates config and restarts/reloads caddy-l4."""
     s = _state(naive_enabled=True, anytls_enabled=True)
@@ -469,6 +480,7 @@ def test_rebuild_starts_caddy():
         mock_run.assert_any_call(["systemctl", "reload-or-restart", "caddy-l4"], capture_output=True)
 
 
+@pytest.mark.usefixtures("isolated_caddy_runtime")
 def test_rebuild_restarts_when_admin_endpoint_migration_breaks_reload():
     s = _state(naive_enabled=True, anytls_enabled=True)
     s.protocols["anytls"].config.update(
@@ -494,6 +506,7 @@ def test_rebuild_restarts_when_admin_endpoint_migration_breaks_reload():
     mock_run.assert_any_call(["systemctl", "restart", "caddy-l4"], capture_output=True)
 
 
+@pytest.mark.usefixtures("isolated_caddy_runtime")
 def test_rebuild_stops_when_single():
     """rebuild() stops caddy-l4 when 0-1 backends are active."""
     s = _state(naive_enabled=True, anytls_enabled=False)
@@ -602,6 +615,7 @@ def test_needs_mux_with_sub_domain():
     assert needs_mux(s) is True
 
 
+@pytest.mark.usefixtures("isolated_caddy_runtime")
 def test_rebuild_runs_caddy_l4_with_only_sub_domain():
     """rebuild() запускает caddy-l4, если активен только домен подписок."""
     s = _state(naive_enabled=False, anytls_enabled=False)

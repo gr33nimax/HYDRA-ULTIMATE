@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any, Protocol
 
 from hydra.contracts.managed_node_installation import InstallPlan, InstallRequest
@@ -35,6 +36,7 @@ class ManagedNodeOperations(Protocol):
     def remove_cascade(self, cascade_id: str, confirmed: bool, progress=None) -> Operation: ...
     def resume_cascade(self, operation_id: str, progress=None) -> Operation: ...
     def list_cascades(self) -> list[CascadeDefinition]: ...
+    def list_cascade_operations(self) -> list[Operation]: ...
     def plan(self, request: InstallRequest, ssh_auth: SshPasswordChannel | None) -> InstallPlan: ...
     def install(
         self,
@@ -102,6 +104,9 @@ class UnavailableManagedNodeOperations:
         raise RuntimeError("managed-node cascades are unavailable")
 
     def list_cascades(self) -> list[CascadeDefinition]:
+        raise RuntimeError("managed-node cascades are unavailable")
+
+    def list_cascade_operations(self) -> list[Operation]:
         raise RuntimeError("managed-node cascades are unavailable")
 
     def plan(self, request: InstallRequest, ssh_auth: SshPasswordChannel | None) -> InstallPlan:
@@ -218,7 +223,18 @@ class ManagedNodeOperationsService:
     def list_cascades(self) -> list[CascadeDefinition]:
         return list(self._records.read_namespace().cascades)
 
+    def list_cascade_operations(self) -> list[Operation]:
+        return [item for item in self._records.list_operations()
+                if item.kind in {"cascade_save", "cascade_remove"} and item.state in {"pending", "running", "recovery_required"}]
+
     def save_cascade(self, definition: CascadeDefinition, confirmed: bool, progress=None) -> Operation:
+        if type(confirmed) is not bool or not confirmed:
+            raise ValueError("cascade changes require explicit confirmation")
+        if self._sync_service is not None:
+            for participant in sorted({definition.entry_id, definition.exit_id} - {"base"}):
+                report = self._sync_service.sync(participant, progress)
+                if report.errors or report.pending_operations:
+                    raise RuntimeError("cascade participant users/configuration are not synchronized: " + participant)
         return self._cascade_service.save_cascade(definition, confirmed=confirmed, progress=progress)
 
     def configure_protocol(self, node_id: str, assignment: ProtocolAssignment, confirmed: bool) -> SyncReport | None:
@@ -303,7 +319,9 @@ class ManagedNodeOperationsService:
     def sync(self, node_id: str | None = None, progress: Callable[[dict[str, str]], None] | None = None) -> SyncReport:
         if self._sync_service is None:
             raise RuntimeError("managed-node sync is unavailable")
-        return self._sync_service.sync(node_id, progress)
+        report = self._sync_service.sync(node_id, progress)
+        errors = self._cascade_service.refresh(node_id)
+        return replace(report, errors=[*report.errors, *errors]) if errors else report
 
     def check(
         self, node_id: str, deep: bool, progress: Callable[[dict[str, str]], None] | None = None
@@ -317,7 +335,8 @@ class ManagedNodeOperationsService:
     ) -> tuple[AppState, dict[str, str], list[str]]:
         if self._sync_service is None:
             return local_sync()
-        return self._sync_service.run_cycle(local_sync)
+        state, blocked, errors = self._sync_service.run_cycle(local_sync)
+        return state, blocked, [*errors, *self._cascade_service.refresh()]
 
     def _finish_install_apply(self, operation: Operation, progress) -> Operation:
         if (

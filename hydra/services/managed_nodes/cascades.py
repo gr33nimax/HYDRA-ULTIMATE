@@ -109,6 +109,43 @@ class ManagedNodeCascadeService:
         """Rename only the subscription label; keep IDs and route materials stable."""
         self._records.rename_cascade(cascade_id, name)
 
+    def refresh(self, node_id: str | None = None) -> list[str]:
+        """Use the existing sync cycle to finalize leases and refresh whole-path publication."""
+        if self._runtime is None:
+            return []
+        errors = []
+        operations = self._records.list_operations()
+        for operation in operations:
+            if operation.kind not in {"cascade_save", "cascade_remove"} or operation.state not in {"pending", "running", "recovery_required"}:
+                continue
+            if node_id is not None and node_id not in _participants(_from_plan(operation, "previous"), _from_plan(operation, "cascade")):
+                continue
+            try:
+                result = self.resume_cascade(operation.id)
+                if result.state != "succeeded":
+                    errors.append(f"cascade {operation.target_id}: {result.error or result.state}")
+            except Exception as exc:
+                errors.append(f"cascade {operation.target_id}: {_bounded(str(exc))}")
+        for route in self._records.read_namespace().cascades:
+            if node_id is not None and node_id not in {route.entry_id, route.exit_id}:
+                continue
+            operation = next((item for item in reversed(operations)
+                              if item.kind == "cascade_save" and item.target_id == route.id
+                              and item.state == "succeeded"), None)
+            if operation is None:
+                continue
+            try:
+                self._finalize_participants(operation, _from_plan(operation, "previous"), _from_plan(operation, "cascade"))
+                if self._runtime.verify_path(operation.id, route) is not True:
+                    raise RuntimeError("whole-path verification is unavailable")
+                self._runtime.commit_profiles(operation.id, _from_plan(operation, "cascade"))
+            except Exception as exc:
+                store = getattr(self._runtime, "_publication_store", None)
+                if store is not None:
+                    store.suspend(route.id)
+                errors.append(f"cascade {route.name}: {_bounded(str(exc))}")
+        return errors
+
     def remove_cascade(
         self,
         cascade_id: str,
@@ -181,6 +218,7 @@ class ManagedNodeCascadeService:
                     outcome = runtime.participant_status(operation.id, participant)
                     if outcome == "applied":
                         applied.append(participant)
+                        continue
                     if outcome == "unknown":
                         raise _CascadeRecoveryError(f"{participant}: apply result is unknown; refusing request replay")
                     raise

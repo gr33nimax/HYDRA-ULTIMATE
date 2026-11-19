@@ -19,6 +19,8 @@ from hydra.contracts.managed_node_models import (
 )
 from hydra.contracts.managed_node_observations import ConfirmedProfiles
 from hydra.core.state_models import AppState, PluginState, User
+from hydra.core.state_managed_nodes import managed_nodes_from_extensions, store_managed_nodes
+from dataclasses import replace
 from hydra.services.configuration import restore_state_in_place
 from hydra.services.managed_nodes.access import user_from_assignment
 from hydra.services.managed_nodes.profile_store import ManagedNodeProfileStore
@@ -238,6 +240,8 @@ class ManagedNodeApplyService:
                 raise ValueError(f"unsupported managed-node transport: {assignment.name}")
 
     def _project_protocols(self, desired: NodeDesired, state: AppState) -> None:
+        namespace = managed_nodes_from_extensions(state.feature_extensions)
+        store_managed_nodes(state.feature_extensions, replace(namespace, cascades=list(desired.cascades)))
         assignments = {item.name: item for item in desired.protocols}
         for plugin in self._protocols.list():
             if plugin.meta.category.value != "transport":

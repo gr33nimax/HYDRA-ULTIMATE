@@ -2,4 +2,5 @@
 # small: transitive resolution remains platform-specific, while direct
 # dependencies are pinned for reproducible HYDRA behavior.
 cryptography==50.0.0
+grpcio==1.85.1
 python-telegram-bot[job-queue]==22.8

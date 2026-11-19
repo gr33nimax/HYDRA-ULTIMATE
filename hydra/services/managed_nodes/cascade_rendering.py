@@ -26,7 +26,7 @@ from hydra.services.managed_nodes.cascade_preparation import CascadeTechnicalPre
 from hydra.services.managed_nodes.cascade_restore import CascadeRestoreContext
 from hydra.services.managed_nodes.cascade_render_capture import capture_cascade_scope
 from hydra.services.user_access import access_status
-from hydra.utils.crypto import derive_hex_key
+from hydra.core.runtime_users import shared_runtime_password
 
 _HEX_SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _PROTOCOLS = frozenset({"vless", "anytls"})
@@ -116,7 +116,7 @@ class CascadePeerMaterial:
             ProbeMaterial(protocol, self.client_outbound).validate()
         except ValueError as exc:
             raise ValueError("cascade peer material is invalid") from exc
-        expected = transit_user.uuid if protocol == "vless" else derive_hex_key("anytls-pass", transit_user.uuid)
+        expected = transit_user.uuid if protocol == "vless" else shared_runtime_password(transit_user)
         credential_key = "uuid" if protocol == "vless" else "password"
         if self.client_outbound.get(credential_key) != expected:
             raise ValueError("cascade peer credential does not match its scoped transit subject")
@@ -166,7 +166,7 @@ class CascadeTechnicalPeerMaterial:
             ProbeMaterial(self.protocol, self.client_outbound).validate()
         except ValueError as exc:
             raise ValueError("cascade technical peer material is invalid") from exc
-        expected = transit_user.uuid if self.protocol == "vless" else derive_hex_key("anytls-pass", transit_user.uuid)
+        expected = transit_user.uuid if self.protocol == "vless" else shared_runtime_password(transit_user)
         key = "uuid" if self.protocol == "vless" else "password"
         if self.client_outbound.get(key) != expected:
             raise ValueError("cascade technical peer credential does not match its transit identity")
@@ -316,7 +316,7 @@ class ManagedNodeCascadeRenderer:
                         self._append_entry(fragment, route, protocol, subject, material)
                     else:
                         fragment.route_rules.append({"auth_user": [subject.email], "outbound": "direct"})
-                    users.append(RuntimeSubject(subject.email, subject.uuid, (protocol,)))
+                    users.append(RuntimeSubject(subject.email, subject.uuid, (protocol,), True))
 
     def _render_technical(self, state, users, fragment) -> None:
         preparation_provider = self._technical_preparation_provider
@@ -364,7 +364,7 @@ class ManagedNodeCascadeRenderer:
                 self._append_technical_entry(fragment, preparation, local, material)
             else:
                 fragment.route_rules.append({"auth_user": [local.email], "outbound": "direct"})
-            users.append(RuntimeSubject(local.email, local.uuid, (preparation.protocol,)))
+            users.append(RuntimeSubject(local.email, local.uuid, (preparation.protocol,), True))
 
     @staticmethod
     def _preparation_matches_state(state: AppState, preparation: CascadeTechnicalPreparation) -> bool:

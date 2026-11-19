@@ -163,7 +163,7 @@ def test_restore_rebuilds_only_current_business_users(tmp_path, participant, pro
     state = AppState(protocols={protocol: PluginState(enabled=True)}, users=[latest])
     users, fragment = context.render_current_users(state, credentials, participant)
     expected_subject = scope.subject(participant, protocol, role, latest)
-    assert users == (RuntimeSubject(expected_subject.email, expected_subject.uuid, (protocol,)),)
+    assert users == (RuntimeSubject(expected_subject.email, expected_subject.uuid, (protocol,), True),)
     assert old_subject.email not in {item.email for item in users}
     if participant == "exit":
         assert fragment.outbounds == []

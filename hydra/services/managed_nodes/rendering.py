@@ -12,6 +12,7 @@ from hydra.core.state_models import AppState
 from hydra.contracts.managed_node_cascade import CascadeParticipantRequest
 from hydra.contracts.managed_node_models import CascadeDefinition
 from hydra.services.managed_nodes.cascade_credentials import CascadeCredentialStore
+from hydra.services.managed_nodes.cascade_deployment import CascadeDeploymentStore
 from hydra.services.managed_nodes.cascade_participant_store import CascadeParticipantStore
 from hydra.services.managed_nodes.cascade_restore import CascadeRestoreContext
 from hydra.services.managed_nodes.cascade_preparation import ManagedNodeCascadePreparationOwner
@@ -30,6 +31,7 @@ class ProductionRuntimeContributions:
 
     cascades: ManagedNodeCascadeRenderer
     probe_identity: ManagedNodeProbeIdentityStore | None = None
+    deployments: CascadeDeploymentStore | None = None
 
     def __call__(self, state: AppState) -> RuntimeRenderContributions:
         cascade = self.cascades.render(state)
@@ -37,7 +39,9 @@ class ProductionRuntimeContributions:
             RuntimeSubject(user.email, user.uuid, _PROBE_PROTOCOLS)
             for user in (self.probe_identity.runtime_users() if self.probe_identity is not None else ())
         )
-        return RuntimeRenderContributions(probes + cascade.users, cascade.fragments)
+        deployed = self.deployments.render(state) if self.deployments is not None else RuntimeRenderContributions()
+        return RuntimeRenderContributions(probes + cascade.users + deployed.users,
+                                           {**cascade.fragments, **deployed.fragments})
 
     def capture_cascade_scope(
         self,
@@ -45,6 +49,8 @@ class ProductionRuntimeContributions:
         request: CascadeParticipantRequest,
         previous: CascadeDefinition | None,
     ) -> CascadeRestoreContext:
+        if self.deployments is not None:
+            return self.deployments.capture(state, request, previous)
         return self.cascades.capture_scope(state, request, previous)
 
 
@@ -56,6 +62,7 @@ def production_runtime_contributions(
     preparation_owner: ManagedNodeCascadePreparationOwner | None = None,
     technical_peer_material_provider: TechnicalPeerMaterialProvider | None = None,
     participant_store: CascadeParticipantStore | None = None,
+    deployments: CascadeDeploymentStore | None = None,
 ) -> Callable[[AppState], RuntimeRenderContributions]:
     """Wire read-only cascade rendering and technical probes into production."""
     credentials = CascadeCredentialStore(host=host, root=root / "cascade-credentials")
@@ -68,7 +75,7 @@ def production_runtime_contributions(
         technical_peer_material_provider=technical_peer_material_provider,
         restore_context_provider=(participant_store.restoration_contexts if participant_store is not None else None),
     )
-    return ProductionRuntimeContributions(cascades, probe_identity)
+    return ProductionRuntimeContributions(cascades, probe_identity, deployments)
 
 
 __all__ = ["production_runtime_contributions"]

@@ -179,6 +179,25 @@ class CascadeParticipantStore:
                 raise ValueError("cascade participant record scope does not match its request")
             return value
 
+    def reconcile_application(self, request, receipt=None):
+        """Persist a live-proof recovery result without replaying a configuration effect."""
+        request.validate()
+        with self._lock:
+            record = self.record(request)
+            if record is None or record["phase"] not in {"applying", "recovery_required"} or record["rollback_requested"]:
+                raise ValueError("cascade application is not recoverable from this phase")
+            if self.snapshot_data(request) is None:
+                raise ValueError("cascade application recovery requires its snapshot")
+            if receipt is None:
+                record["phase"] = "prepared"
+            else:
+                receipt.validate_for(request)
+                if receipt.state != "applied" or receipt.engine_identity != record["before_engine_identity"]:
+                    raise ValueError("cascade recovery receipt differs from its engine")
+                record.update(phase="applied", after_engine_identity=receipt.engine_identity,
+                              after_config_identity=receipt.config_identity, receipt=receipt.to_document())
+            self._write_record(self._path(request, ".json"), record)
+
     def update(self, request: CascadeParticipantRequest, *, phase: str, **changes: Any) -> dict[str, Any]:
         if phase not in _PHASES:
             raise ValueError("cascade participant phase is invalid")

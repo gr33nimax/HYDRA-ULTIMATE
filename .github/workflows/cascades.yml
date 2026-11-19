@@ -1,0 +1,45 @@
+name: Cascade real-engine acceptance
+
+on:
+  pull_request:
+  push:
+    branches: [dev, debug]
+
+permissions:
+  contents: read
+
+jobs:
+  two-hop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Check out pinned HydraCore source
+        uses: actions/checkout@v6
+        with:
+          repository: gr33nimax/hydracore
+          ref: 8f40627aa38bc797610fa886450ffdace5b1edeb
+          path: core-source
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: core-source/go.mod
+          cache-dependency-path: core-source/go.sum
+      - name: Build actual protocol client/server and cumulative stats API
+        working-directory: core-source
+        run: go build -tags with_v2ray_api,with_utls,with_clash_api -o ../cascade-core ./cmd/sing-box
+      - name: Install HYDRA test dependencies
+        run: python -m pip install -r requirements-dev.lock
+      - name: Run isolated unprivileged two-hop and mTLS acceptance
+        env:
+          HYDRA_CASCADE_CORE: ${{ github.workspace }}/cascade-core
+        run: python -m pytest -vv --tb=short tests/test_cascade_live.py tests/test_cascade_production.py
+      - name: Upload isolated engine diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cascade-engine-diagnostics
+          path: /tmp/pytest-of-*/pytest-*/**/engine.log
+          retention-days: 3

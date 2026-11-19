@@ -77,7 +77,9 @@ from hydra.services.uninstall import CleanupStep, UninstallService
 from hydra.services.users import UserService
 from hydra.bootstrap_application import production_admin_surfaces, production_orchestration
 from hydra.bootstrap_managed_nodes import production_managed_node_runtime
-from hydra.bootstrap_cascade import production_cascade_components
+from hydra.bootstrap_cascade import production_cascade_components, production_scoped_counter_source
+from hydra.services.managed_nodes.cascade_publication import CascadePublicationStore
+from hydra.services.subscriptions.node_exports import CascadeSubscriptionReader
 from hydra.bootstrap_managed_nodes import preparation_owner as _cascade_preparation_owner
 
 
@@ -285,7 +287,10 @@ def _managed_node_services(
         observations=observations,
         state_reader=load_state,
     )
-    profiles = ManagedNodeSubscriptionReader(profile_store=profile_store)
+    cascade_profiles = CascadeSubscriptionReader(CascadePublicationStore(
+        host=HOST, root=state_backend.STATE_DIR / "managed-nodes" / "cascade-publications"))
+    profiles = ManagedNodeSubscriptionReader(profile_store=profile_store,
+                                             cascade_profiles=cascade_profiles.profiles_for_user)
     operations = production_managed_node_operations(
         records=records,
         credentials=credentials,
@@ -336,6 +341,9 @@ def production_application(
         lifecycle_overrides={
             "vless_cdn": VlessCdnLifecycleOperations(orchestration),
         },
+        cascade_counter_provider=production_scoped_counter_source(
+            host=HOST, deployments=plugins.runtime_contributions.deployments, config_path=singbox.SINGBOX_CONFIG,
+        ),
     )
     traffic = TrafficService(protocols)
     participant_owner, cascade_runtime = production_cascade_components(

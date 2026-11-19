@@ -225,11 +225,15 @@ def menu_cascades(app: ApplicationService) -> None:
         try:
             cascades = app.nodes.list_cascades()
             nodes = app.nodes.list()
+            pending = app.nodes.list_cascade_operations()
         except Exception as exc:
             error(f"Каскады недоступны: {_reason(exc)}")
             return
         indexed = {str(index + 1): item for index, item in enumerate(cascades)}
         options = [(key, item.name, f"{item.entry_id} → {item.exit_id}") for key, item in indexed.items()]
+        recoverable = {str(len(indexed) + index): item for index, item in enumerate(pending, 1)}
+        options.extend((key, "Восстановить каскад " + item.target_id, f"Операция: {item.id}")
+                       for key, item in recoverable.items())
         options.extend([("A", "Добавить каскад", "маршрут через два сервера"), ("0", "Назад", "")])
         choice = menu(options, "КАСКАДЫ")
         if choice == "0":
@@ -238,6 +242,12 @@ def menu_cascades(app: ApplicationService) -> None:
             _create_cascade(app, nodes)
         elif choice in indexed:
             _cascade_card(indexed[choice], app)
+        elif choice in recoverable:
+            try:
+                _show_report("ВОССТАНОВЛЕНИЕ КАСКАДА", app.nodes.resume_cascade(recoverable[choice].id))
+            except Exception as exc:
+                error(f"Восстановление не завершено: {_reason(exc)}")
+            prompt("Enter — продолжить")
 
 
 def _create_cascade(app: ApplicationService, nodes: list[NodeView]) -> None:

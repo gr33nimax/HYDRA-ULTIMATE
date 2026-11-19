@@ -22,6 +22,7 @@ from hydra.services.managed_nodes.accounting import (
     record_node_counters,
     traffic_reset_epoch,
 )
+from hydra.services.managed_nodes.cascade_accounting import scoped_samples
 
 _NODE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _MAX_BYTES = 2 * 1024 * 1024
@@ -164,6 +165,14 @@ class ManagedNodeObservationProvider:
                     state = updated_state
                 else:
                     traffic = project_node_counters(state, counters, runtime_id=runtime_id)
+        scoped = getattr(self._protocols, "cascade_counter_snapshot", None)
+        if callable(scoped):
+            bindings, raw, epoch = scoped(state)
+            if commit_accounting and self._state_updater is not None:
+                state, extra = self._state_updater(lambda latest: scoped_samples(latest, bindings, raw, epoch))
+            else:
+                extra = scoped_samples(state, bindings, raw, epoch, commit=False)
+            traffic.extend(extra)
         runtime["protocols"] = self._protocol_facts(state)
         receipt = self._current_receipt(state, runtime)
         return NodeSample(

@@ -15,7 +15,7 @@ from hydra.contracts.managed_node_probe import ProbeMaterial
 from hydra.core.state_models import AppState
 from hydra.services.managed_nodes.cascade_credentials import CascadeCredentialStore
 from hydra.services.user_access import access_status
-from hydra.utils.crypto import derive_hex_key
+from hydra.core.runtime_users import shared_runtime_password
 
 _ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _PROTOCOLS = frozenset({"vless", "anytls"})
@@ -166,7 +166,8 @@ class CascadeRestoreContext:
             "protocol": self.protocol,
             "business_user_uuids": list(self.business_user_uuids),
             "users": [
-                {"email": user.email, "uuid": user.uuid, "protocols": list(user.protocols)} for user in self.users
+                {"email": user.email, "uuid": user.uuid, "protocols": list(user.protocols),
+                 **({"shared_credentials": True} if user.shared_credentials else {})} for user in self.users
             ],
             "fragment": self.fragment.as_dict(),
         }
@@ -194,11 +195,13 @@ class CascadeRestoreContext:
             raise ValueError("cascade restore artifact has an invalid shape")
         users = []
         for item in raw["users"]:
-            if not isinstance(item, dict) or set(item) != {"email", "uuid", "protocols"}:
+            if not isinstance(item, dict) or set(item) not in ({"email", "uuid", "protocols"},
+                                                             {"email", "uuid", "protocols", "shared_credentials"}):
                 raise ValueError("cascade restore subject has an invalid shape")
             if not isinstance(item["protocols"], list):
                 raise ValueError("cascade restore subject protocol scope is invalid")
-            users.append(RuntimeSubject(item["email"], item["uuid"], tuple(item["protocols"])))
+            users.append(RuntimeSubject(item["email"], item["uuid"], tuple(item["protocols"]),
+                                         item.get("shared_credentials", False)))
         fragment_raw = raw["fragment"]
         if not isinstance(fragment_raw, dict) or set(fragment_raw) != {
             "inbounds",
@@ -256,7 +259,7 @@ class CascadeRestoreContext:
         for business_user in business_users:
             role = "entry" if is_entry else "transit"
             subject = scope.subject(participant_id, self.protocol, role, business_user)
-            restored_users.append(RuntimeSubject(subject.email, subject.uuid, (self.protocol,)))
+            restored_users.append(RuntimeSubject(subject.email, subject.uuid, (self.protocol,), True))
             if not is_entry:
                 fragment.route_rules.append({"auth_user": [subject.email], "outbound": "direct"})
                 continue
@@ -266,7 +269,7 @@ class CascadeRestoreContext:
             outbound = copy.deepcopy(templates.get(business_user.uuid, template))
             credential_key = "uuid" if self.protocol == "vless" else "password"
             outbound[credential_key] = (
-                transit.uuid if self.protocol == "vless" else derive_hex_key("anytls-pass", transit.uuid)
+                transit.uuid if self.protocol == "vless" else shared_runtime_password(transit)
             )
             suffix = hashlib.sha256(subject.uuid.encode("utf-8")).hexdigest()[:12]
             tag = f"cascade-{self.cascade_id}-{self.protocol}-{suffix}"

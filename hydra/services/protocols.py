@@ -89,6 +89,10 @@ class ProtocolService:
     invoker: PluginInvoker = field(default_factory=PluginInvoker)
     state_reader: Callable[[], AppState] | None = None
     lifecycle_overrides: Mapping[str, ProtocolOperations] = field(default_factory=dict)
+    cascade_counter_provider: Callable | None = None
+
+    def cascade_counter_snapshot(self, state: AppState):
+        return self.cascade_counter_provider(state) if self.cascade_counter_provider is not None else ({}, {}, "")
 
     def _lifecycle_operations(self, name: str) -> ProtocolOperations:
         return self.lifecycle_overrides.get(name, self.operations)

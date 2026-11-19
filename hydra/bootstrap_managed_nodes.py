@@ -16,6 +16,8 @@ from hydra.services.managed_nodes.cascade_participant import technical_peer_prov
 from hydra.services.managed_nodes.cascade_participant_store import CascadeParticipantStore
 from hydra.services.managed_nodes.cascade_preparation import ManagedNodeCascadePreparationOwner
 from hydra.services.managed_nodes.cascade_rendering import TechnicalPeerMaterialProvider
+from hydra.services.managed_nodes.cascade_deployment import CascadeDeploymentStore
+from hydra.services.managed_nodes.cascade_credentials import CascadeCredentialStore
 from hydra.services.managed_nodes.probe_clients import ManagedNodeProbeIdentityStore
 from hydra.services.managed_nodes.records import ManagedNodeRecords
 from hydra.services.managed_nodes.rendering import production_runtime_contributions
@@ -75,6 +77,11 @@ def production_plugins(
             technical_peer_material_provider=technical_peer_material_provider
             or technical_peer_provider(participant_store, participant_id),
             participant_store=participant_store,
+            deployments=CascadeDeploymentStore(
+                host=host, root=root / "cascade-deployments", participant_id=participant_id,
+                credentials=CascadeCredentialStore(host=host, root=root / "cascade-credentials"),
+                transactions=participant_store,
+            ),
         ),
     )
 
