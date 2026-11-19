@@ -86,7 +86,7 @@ def test_manager_observation_and_profile_deletion_are_plugin_owned(tmp_path):
     assert not profile.exists()
 
 
-def test_uninstall_removes_the_legacy_wgcf_artifacts(tmp_path):
+def test_uninstall_removes_legacy_wgcf_and_warpscout_artifacts(tmp_path):
     binary = tmp_path / "wgcf"
     profile = tmp_path / "wgcf-profile.conf"
     account = tmp_path / "wgcf-account.toml"
@@ -95,6 +95,12 @@ def test_uninstall_removes_the_legacy_wgcf_artifacts(tmp_path):
         path.write_text("x", encoding="utf-8")
     cache = tmp_path / "warp_external.json"
     cache.write_text("{}", encoding="utf-8")
+    scanner = tmp_path / "warpscout"
+    scanner.write_text("x", encoding="utf-8")
+    account_dir = tmp_path / "scanner-account"
+    account_dir.mkdir()
+    scanner_account = account_dir / "account.json"
+    scanner_account.write_text("{}", encoding="utf-8")
 
     with (
         patch(
@@ -102,10 +108,14 @@ def test_uninstall_removes_the_legacy_wgcf_artifacts(tmp_path):
             (binary, profile, account, install_log),
         ),
         patch("hydra.plugins.warp.plugin.WARP_EXTERNAL_CACHE", cache),
+        patch("hydra.plugins.warp.masque_scan.WARPSCOUT_BIN", scanner),
+        patch("hydra.plugins.warp.masque_scan.ACCOUNT", scanner_account),
     ):
         assert WarpPlugin().uninstall() is True
 
     assert not any(path.exists() for path in (binary, profile, account, install_log))
+    assert not scanner.exists()
+    assert not account_dir.exists()
     assert cache.exists()  # reinstall must retain selected external rules
 
 
